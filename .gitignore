@@ -1,0 +1,11 @@
+# .NET build output
+Cartographer/server/bin/
+Cartographer/server/obj/
+Cartographer/server/data.json
+Cartographer/server/data.json.tmp
+
+# Swift build output
+Cartographer/macos-agent/.build/
+
+# MacOS Files
+.DS_Store
