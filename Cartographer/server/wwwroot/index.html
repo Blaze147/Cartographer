@@ -123,12 +123,23 @@ function dot(state) {
 
 // ---- Experiments ------------------------------------------------------
 
+let lastExperiments = null;  // JSON snapshot of the experiments we last rendered
+
 async function loadExperiments() {
   const res = await authedFetch('/api/experiments');
   if (!res.ok) return;
   const exps = await res.json();
+  const snap = JSON.stringify(exps);
+  // Nothing changed since the last render: leave the DOM alone so the user's
+  // in-progress typing, caret, expanded files rows and open diffs stay
+  // exactly as they are instead of being wiped by the auto-refresh timer.
+  if (snap === lastExperiments) return;
+  lastExperiments = snap;
+  captureCurrentFocus();
+  captureExpandedState();
   $("#experimentsWrap").innerHTML = exps.map(exp => renderExp(exp)).join('');
   restoreDirty();
+  restoreExpandedState();
 }
 
 function renderExp(exp) {
@@ -138,37 +149,28 @@ function renderExp(exp) {
       <td>${dotForRun(r)}</td>
       <td>${esc(r.harness || '')}</td>
       <td>
-        <select id="f-${exp.id}-${r.machineId}-completion" class="form-select form-select-sm"
-          oninput="markDirty('${exp.id}','${r.machineId}','completion',this.value,this)"
-          onfocusin="markFocus('${exp.id}','${r.machineId}','completion',this)"
-          onfocusout="clearFocus('${exp.id}','${r.machineId}','completion')"
-          onkeyup="updateCaret(this)" onclick="updateCaret(this)"
+        <select id="f-${exp.id}-${r.machineId}-completion" data-exp="${exp.id}" data-mach="${r.machineId}" data-field="completion" class="form-select form-select-sm"
+          oninput="markDirty('${exp.id}','${r.machineId}','completion',this.value)"
           onchange="saveRun('${exp.id}','${r.machineId}','completion',this.value)">
           <option value="" ${r.completion===''?'selected':''}>—</option>
           <option value="Completed" ${r.completion==='Completed'?'selected':''}>Completed</option>
           <option value="Aborted" ${r.completion==='Aborted'?'selected':''}>Aborted</option>
         </select>
       </td>
-      <td><input id="f-${exp.id}-${r.machineId}-score" class="form-control form-control-sm" style="width:70px" type="number" step="0.5"
+      <td><input id="f-${exp.id}-${r.machineId}-score" data-exp="${exp.id}" data-mach="${r.machineId}" data-field="score" class="form-control form-control-sm" style="width:70px" type="number" step="0.5"
            value="${r.score ?? ''}"
-           oninput="markDirty('${exp.id}','${r.machineId}','score',this.value,this)"
-           onfocusin="markFocus('${exp.id}','${r.machineId}','score',this)"
-           onfocusout="clearFocus('${exp.id}','${r.machineId}','score')"
-           onkeyup="updateCaret(this)" onclick="updateCaret(this)"
+           oninput="markDirty('${exp.id}','${r.machineId}','score',this.value)"
+           onkeydown="enterBlur(event)"
            onchange="saveRun('${exp.id}','${r.machineId}','score',this.value)"></td>
-      <td><input id="f-${exp.id}-${r.machineId}-elapsedTime" class="form-control form-control-sm" style="width:90px"
+      <td><input id="f-${exp.id}-${r.machineId}-elapsedTime" data-exp="${exp.id}" data-mach="${r.machineId}" data-field="elapsedTime" class="form-control form-control-sm" style="width:90px"
            value="${esc(r.elapsedTime || '')}" placeholder="3:42"
-           oninput="markDirty('${exp.id}','${r.machineId}','elapsedTime',this.value,this)"
-           onfocusin="markFocus('${exp.id}','${r.machineId}','elapsedTime',this)"
-           onfocusout="clearFocus('${exp.id}','${r.machineId}','elapsedTime')"
-           onkeyup="updateCaret(this)" onclick="updateCaret(this)"
+           oninput="markDirty('${exp.id}','${r.machineId}','elapsedTime',this.value)"
+           onkeydown="enterBlur(event)"
            onchange="saveRun('${exp.id}','${r.machineId}','elapsedTime',this.value)"></td>
-      <td><input id="f-${exp.id}-${r.machineId}-tokens" class="form-control form-control-sm" style="width:90px"
+      <td><input id="f-${exp.id}-${r.machineId}-tokens" data-exp="${exp.id}" data-mach="${r.machineId}" data-field="tokens" class="form-control form-control-sm" style="width:90px"
            value="${esc(r.tokens || '')}" placeholder="32000"
-           oninput="markDirty('${exp.id}','${r.machineId}','tokens',this.value,this)"
-           onfocusin="markFocus('${exp.id}','${r.machineId}','tokens',this)"
-           onfocusout="clearFocus('${exp.id}','${r.machineId}','tokens')"
-           onkeyup="updateCaret(this)" onclick="updateCaret(this)"
+           oninput="markDirty('${exp.id}','${r.machineId}','tokens',this.value)"
+           onkeydown="enterBlur(event)"
            onchange="saveRun('${exp.id}','${r.machineId}','tokens',this.value)"></td>
       <td>${esc(r.filesChanged ?? '')}</td>
       <td class="text-success">+${esc(r.linesAdded ?? '')}</td>
@@ -176,18 +178,16 @@ function renderExp(exp) {
       <td>${esc((r.commitSha || '').slice(0,7))}</td>
       <td><button class="btn btn-sm btn-outline-primary" onclick="toggleFiles('${exp.id}','${r.machineId}')">…</button></td>
       <td class="small"><div class="d-flex">
-        <input id="f-${exp.id}-${r.machineId}-notes" class="form-control form-control-sm me-1" placeholder="notes"
+        <input id="f-${exp.id}-${r.machineId}-notes" data-exp="${exp.id}" data-mach="${r.machineId}" data-field="notes" class="form-control form-control-sm me-1" placeholder="notes"
           value="${esc(r.notes || '')}"
-          oninput="markDirty('${exp.id}','${r.machineId}','notes',this.value,this)"
-          onfocusin="markFocus('${exp.id}','${r.machineId}','notes',this)"
-          onfocusout="clearFocus('${exp.id}','${r.machineId}','notes')"
-          onkeyup="updateCaret(this)" onclick="updateCaret(this)"
+          oninput="markDirty('${exp.id}','${r.machineId}','notes',this.value)"
+          onkeydown="enterBlur(event)"
           onchange="saveRun('${exp.id}','${r.machineId}','notes',this.value)">
       </div></td>
     </tr>
     <tr class="files-row hidden" id="files-${exp.id}-${r.machineId}"><td colspan="12" class="small">
       Changed files:<div class="mono">${esc((r.changedFiles||[]).join(', ') || '(none)')}</div>
-      <details><summary>Full diff</summary><pre class="mono small bg-white border p-2">${esc(r.diff||'(none)')}</pre></details>
+      <details id="detail-${exp.id}-${r.machineId}"><summary>Full diff</summary><pre class="mono small bg-white border p-2">${esc(r.diff||'(none)')}</pre></details>
     </td></tr>`).join('');
 
   return `
@@ -229,6 +229,33 @@ function toggleFiles(expId, machineId) {
   if (el) el.classList.toggle('hidden');
 }
 
+// Which "files" rows are currently expanded and which <details> blocks are
+// open, keyed by element id, so a genuine re-render doesn't collapse them.
+const expandedRows = new Set();
+const openDetails = new Set();
+
+function captureExpandedState() {
+  expandedRows.clear();
+  document.querySelectorAll('.files-row').forEach(row => {
+    if (!row.classList.contains('hidden')) expandedRows.add(row.id);
+  });
+  openDetails.clear();
+  document.querySelectorAll('.files-row details').forEach(d => {
+    if (d.open) openDetails.add(d.id);
+  });
+}
+
+function restoreExpandedState() {
+  expandedRows.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.remove('hidden');
+  });
+  openDetails.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.open = true;
+  });
+}
+
 // The run tables are rebuilt on every auto-refresh (5s). Fields are saved on
 // "change" (blur/Enter), not on every keystroke, so without this a refresh
 // would wipe out whatever the user is still typing and drop focus from the
@@ -258,37 +285,38 @@ function fieldEl(expId, machineId, field) {
   return document.getElementById('f-' + expId + '-' + machineId + '-' + field);
 }
 
-function markDirty(expId, machineId, field, value, el) {
+function markDirty(expId, machineId, field, value) {
   dirtyFields[fieldKey(expId, machineId, field)] = value;
-  captureCaret(el);
 }
 
 function clearDirty(expId, machineId, field) {
   delete dirtyFields[fieldKey(expId, machineId, field)];
 }
 
-function markFocus(expId, machineId, field, el) {
-  focusedField = { expId, machineId, field };
-  captureCaret(el);
+// Pressing Enter in a run field commits the value (blur fires "change",
+// which saves) and drops focus so the user isn't stuck in the field.
+function enterBlur(e) {
+  if (e.key === 'Enter') e.currentTarget.blur();
 }
 
-function clearFocus(expId, machineId, field) {
-  if (focusedField &&
-      focusedField.expId === expId &&
-      focusedField.machineId === machineId &&
-      focusedField.field === field) {
-    focusedField = null;
-  }
-}
-
-function updateCaret(el) {
-  captureCaret(el);
-}
-
-function captureCaret(el) {
+function setCaret(el) {
   if (el && typeof el.selectionStart === 'number') {
     caretStart = el.selectionStart;
     caretEnd = el.selectionEnd;
+  }
+}
+
+// Read the currently focused run field and its live caret position from the
+// real DOM element, right before we rebuild the table. This is the source of
+// truth for where to put focus + cursor back after re-rendering — it avoids
+// relying on event bookkeeping that can be clobbered during the re-render.
+function captureCurrentFocus() {
+  const el = document.activeElement;
+  if (el && el.dataset && el.dataset.exp !== undefined && el.dataset.field !== undefined) {
+    focusedField = { expId: el.dataset.exp, machineId: el.dataset.mach, field: el.dataset.field };
+    setCaret(el);
+  } else {
+    focusedField = null;
   }
 }
 
@@ -303,8 +331,12 @@ function restoreDirty() {
   if (focusedField) {
     const el = fieldEl(focusedField.expId, focusedField.machineId, focusedField.field);
     if (el) {
+      // Save locals first: assigning .value and calling .focus() reset the
+      // caret to 0, so restore the position from what we captured before.
+      const s = caretStart;
+      const e = caretEnd;
       el.focus();
-      try { el.setSelectionRange(caretStart, caretEnd); } catch (_) {}
+      try { el.setSelectionRange(s, e); } catch (_) {}
     }
   }
 }
