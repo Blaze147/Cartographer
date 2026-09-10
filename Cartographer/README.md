@@ -101,10 +101,15 @@ open Package.swift
 ```
 
 Run the `CartographerAgent` scheme. A menu-bar icon appears. Its color reflects
-state: **green** ready, **orange** working, **red** error or unreachable server,
-**gray** idle. The menu shows status, harness, branch, lets you **Copy Current
-Prompt** (the experiment prompt, for pasting manually into a coding harness),
-**Open Dashboard**, **Refresh**, and **Quit**.
+state: **green** ready, **orange** working/preparing/collecting, **red** error or
+unreachable server, **gray** idle. The menu shows status, harness, branch, lets
+you **Copy Current Prompt** (the experiment prompt, for pasting manually into a
+coding harness), **Mark Ready**, **Open Dashboard**, **Refresh**, and **Quit**.
+
+Copying the prompt marks the agent as **Working** (icon turns orange) — that's
+the signal that you've begun the run with the harness, so it no longer says
+"Ready". Use **Mark Ready** to return to Ready if you copy the prompt but then
+decide not to proceed.
 
 If Python/`open` are unavailable, launch the built binary directly:
 

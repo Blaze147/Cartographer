@@ -52,7 +52,7 @@ final class Agent: ObservableObject {
     var iconName: String {
         switch status {
         case "Ready", "Collected": return "checkmark.circle.fill"
-        case "Preparing", "Collecting": return "arrow.triangle.2.circlepath"
+        case "Preparing", "Collecting", "Working": return "arrow.triangle.2.circlepath"
         case "Error", "Offline": return "exclamationmark.triangle.fill"
         default: return "circle"
         }
@@ -61,7 +61,7 @@ final class Agent: ObservableObject {
     var iconColor: Color {
         switch status {
         case "Ready", "Collected": return .green
-        case "Preparing", "Collecting": return .orange
+        case "Preparing", "Collecting", "Working": return .orange
         case "Error", "Offline": return .red
         default: return .gray
         }
@@ -69,12 +69,22 @@ final class Agent: ObservableObject {
 
     var configHarness: String { config?.harness ?? "—" }
 
-    /// Copy the current experiment prompt to the clipboard.
+    /// Copy the current experiment prompt to the clipboard, and mark the agent
+    /// as underway. Copying the prompt is the signal that you've begun the run
+    /// with the harness, so the status moves off "Ready" (it will be superseded
+    /// later by a "collect" command when you Complete the experiment).
     func copyPrompt() {
         if let prompt = currentPrompt {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(prompt, forType: .string)
+            status = "Working"
         }
+    }
+
+    /// Manually return to the "Ready" state (e.g. you copied the prompt but
+    /// decided not to proceed, or you want to re-run from the start).
+    func markReady() {
+        status = "Ready"
     }
 
     func openDashboard() {
