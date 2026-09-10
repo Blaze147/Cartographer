@@ -21,6 +21,7 @@ struct CartographerAgentApp: App {
                 Divider()
                 Button("Copy Current Prompt") { agent.copyPrompt() }
                     .disabled(agent.currentPrompt == nil)
+                Button("Mark Ready") { agent.markReady() }
                 Button("Open Dashboard") { agent.openDashboard() }
                 Button("Refresh") { Task { await agent.refresh() } }
                 Divider()
