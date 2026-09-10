@@ -159,7 +159,16 @@ final class Agent: ObservableObject {
             let (data, _) = try await request("/api/agents/\(config.machineId)/command")
             let cmd = try JSONDecoder().decode(ServerCommand.self, from: data)
             // Empty id means the server returned a no-op placeholder.
-            guard !cmd.id.isEmpty, !processed.contains(cmd.id) else { return }
+            guard !cmd.id.isEmpty, !processed.contains(cmd.id) else {
+                // The server is reachable with nothing to do: clear any
+                // transient reachability error so a fresh launch (or a brief
+                // blip) doesn't leave the agent stuck showing "Error".
+                if status == "Error" {
+                    status = "Idle"
+                    lastError = nil
+                }
+                return
+            }
             processed.insert(cmd.id)
             UserDefaults.standard.set(Array(processed), forKey: "processedCommands")
             await handle(cmd)

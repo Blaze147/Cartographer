@@ -1,0 +1,32 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build-server",
+            "type": "shell",
+            "command": "/usr/local/share/dotnet/dotnet",
+            "args": ["build", "${workspaceFolder}/Cartographer/server"],
+            "group": "build",
+            "problemMatcher": "$msCompile",
+            "presentation": {
+                "reveal": "silent",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "build-agent",
+            "type": "shell",
+            "command": "swift",
+            "args": ["build", "--package-path", "${workspaceFolder}/Cartographer/macos-agent"],
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "build-all",
+            "dependsOn": ["build-server", "build-agent"],
+            "dependsOrder": "parallel",
+            "group": { "kind": "build", "isDefault": true },
+            "problemMatcher": []
+        }
+    ]
+}
