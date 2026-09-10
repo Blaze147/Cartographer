@@ -213,7 +213,7 @@ async function saveRun(expId, machineId, field, value) {
 }
 
 async function complete(expId) {
-  if (!confirm('Send a collect command to every registered machine for this experiment?')) return;
+  if (!confirm('Complete this experiment? Every registered machine will auto-commit its changes and collect its results.')) return;
   const res = await authedFetch(`/api/experiments/${expId}/complete`, { method: 'POST' });
   if (res.ok) refresh();
 }

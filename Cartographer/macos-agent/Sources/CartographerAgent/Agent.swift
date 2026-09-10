@@ -287,15 +287,37 @@ final class Agent: ObservableObject {
 
     // ---- Collect ------------------------------------------------------
 
+    // Stage and commit every current change so the committed state is what gets
+    // measured. This removes the need for the user to stage/commit by hand before
+    // completing an experiment. Nothing is changed if the tree is already clean.
+    private func stageAndCommit(_ cmd: ServerCommand) throws {
+        let config = config!
+        // Stage everything (respecting .gitignore), including new and deleted files.
+        _ = try git(["add", "-A"], at: repoDir)
+
+        // If nothing is staged there is nothing to commit; that is fine.
+        let staged = try git(["diff", "--cached", "--name-only"], at: repoDir)
+        guard !staged.isEmpty else { return }
+
+        let baseline = cmd.baseline ?? ""
+        let message = "Experiment \(baseline) task \(cmd.taskNumber) attempt \(cmd.attemptNumber) harness \(config.harness)"
+        // Pass an inline identity so the commit never fails just because the
+        // machine has no global git user.name/user.email configured.
+        _ = try git([
+            "-c", "user.name=Cartographer Agent",
+            "-c", "user.email=\(config.machineId)@cartographer.local",
+            "commit", "-m", message
+        ], at: repoDir)
+    }
+
     private func collect(_ cmd: ServerCommand) throws -> RunData {
         try ensureRepoExists()
         guard let baseline = cmd.baseline else {
             throw GitError("Collect command missing baseline.")
         }
 
-        guard try workingTreeIsClean() else {
-            throw GitError("Repository is not clean. Stage and commit all experiment changes before collecting.")
-        }
+        // Automatically stage and commit all current experiment changes.
+        try stageAndCommit(cmd)
 
         let branch = try git(["branch", "--show-current"], at: repoDir)
         let head = try git(["rev-parse", "HEAD"], at: repoDir)

@@ -69,15 +69,19 @@ from `~/.cartographer/config.json` and talks to the server at
 7. You click **Copy Current Prompt** (now enabled), paste it into your coding
    harness (OpenHands, Claude Code, Codex, DeepSeek Harness, etc.), and run it
    inside the checked-out branch in the repo.
-8. When the work is done, you **stage and commit** the changes yourself (the agent
-   never touches your commits).
+8. When the work is done you do **not** need to stage or commit — the agent does
+   that automatically when you complete the experiment.
 
 ### E. Collect results
 9. In the dashboard click **Complete experiment**.
 10. Server sends a `collect` command to every machine.
-11. Agent verifies the tree is clean, gathers Git statistics (SHA, files/lines
-    changed, full diff) between the baseline tag and `HEAD`, and reports them.
-12. Agent sets status to **Collected**. The experiments table fills in the auto
+11. Before measuring, the agent **automatically stages (`git add -A`) and commits**
+    all current changes with a message describing the baseline, harness, task
+    number, and attempt number (no manual staging/committing required). If the tree
+    is already clean, it just skips the commit.
+12. The agent gathers Git statistics (SHA, files/lines changed, full diff) between
+    the baseline tag and `HEAD`, and reports them.
+13. Agent sets status to **Collected**. The experiments table fills in the auto
     numbers; you fill in the manual fields (status, score, time, tokens, notes).
 
 ---
@@ -140,7 +144,8 @@ This depends on timing/machine registration, but the two most likely scenarios a
 
 3. Watch the agent transition: **Idle → Preparing → Ready**, Branch = `B001-T001-A01-dsh`.
 4. **Copy Current Prompt** is now enabled — click it, paste into your harness.
-5. Run, commit, then **Complete experiment** in the dashboard to collect stats.
+5. Run the harness, then **Complete experiment** in the dashboard. The agent
+   stages and commits your changes automatically before collecting stats.
 
 ---
 

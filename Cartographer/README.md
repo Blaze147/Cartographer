@@ -128,12 +128,14 @@ paste the task in.
    working tree is clean, creates its branch
    (e.g. `B001-T004-A02-openhands` for `baselineB001`, task 4, attempt 2,
    harness OpenHands), and reports errors if anything is wrong.
-4. Manually run the coding harness in that repo on the new branch. When done,
-   **stage and commit** all experiment changes yourself.
+4. Manually run the coding harness in that repo on the new branch. You do **not**
+   need to stage or commit — the agent does that automatically.
 5. Click **Complete experiment** in the dashboard. The server sends a `collect`
-   command to every machine. Each agent verifies the repo is clean, then gathers
-   committed Git statistics (SHA, files/lines changed, and the full diff) and
-   sends them to the server.
+   command to every machine. Each agent **automatically stages (`git add -A`) and
+   commits** all current changes (with a message describing the baseline, harness,
+   task, and attempt) and, only if the tree was already clean, skips the commit.
+   It then gathers committed Git statistics (SHA, files/lines changed, and the
+   full diff) and sends them to the server.
 6. The experiment table fills in the automatically collected numbers. Enter the
    manual fields — completion status, score, elapsed time, tokens, notes — for
    each harness run directly in the table.
@@ -143,9 +145,10 @@ paste the task in.
 * Each repository is a normal Git clone and the harness runs inside it.
 * Experiments are measured as the committed difference between the baseline tag
   (e.g. `baselineB001`) and the completed experiment branch.
-* The working tree must be **clean** before preparing (uncommitted work is
-  never destroyed) and before collecting (you must stage and commit first).
-* The agent never auto-stages, commits, resets, or deletes anything.
+* The working tree must be **clean before preparing** (uncommitted work is never
+  destroyed). On **collect**, the agent automatically stages and commits all
+  current changes, so no manual staging or committing is required before
+  clicking Complete experiment.
 
 ## API
 
