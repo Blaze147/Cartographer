@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cartographer</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<style>
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  table td, table th { vertical-align: middle; }
+  .status-dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; }
+  .dot-green  { background:#28a745; }
+  .dot-orange { background:#fd7e14; }
+  .dot-red    { background:#dc3545; }
+  .dot-gray   { background:#6c757d; }
+  .hidden { display:none; }
+</style>
+</head>
+<body class="bg-light">
+<nav class="navbar navbar-dark bg-dark">
+  <div class="container">
+    <span class="navbar-brand">Cartographer</span>
+    <span class="navbar-text text-warning small" id="authMsg"></span>
+  </div>
+</nav>
+
+<div class="container py-4">
+
+  <!-- New experiment form -->
+  <div class="card mb-4">
+    <div class="card-header">Start Experiment</div>
+    <div class="card-body">
+      <div class="row g-2">
+        <div class="col-md-3">
+          <label class="form-label small">Baseline tag</label>
+          <input id="baseline" class="form-control form-control-sm" value="baselineB001" placeholder="baselineB001">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small">Task number</label>
+          <input id="task" class="form-control form-control-sm" type="number" min="1" value="1">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small">Attempt number</label>
+          <input id="attempt" class="form-control form-control-sm" type="number" min="1" value="1">
+        </div>
+        <div class="col-md-5">
+          <label class="form-label small">Prompt</label>
+          <textarea id="prompt" class="form-control form-control-sm" rows="2"
+            placeholder="Task text goes here"></textarea>
+        </div>
+      </div>
+      <button id="startBtn" class="btn btn-primary btn-sm mt-3">Start experiment</button>
+    </div>
+  </div>
+
+  <!-- Machines -->
+  <div class="card mb-4">
+    <div class="card-header">Machines</div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm table-striped mb-0">
+          <thead><tr>
+            <th>Machine</th><th>Harness</th><th>State</th><th>Branch</th><th>Repo</th><th>Last error</th>
+          </tr></thead>
+          <tbody id="machinesBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Experiments / results -->
+  <div id="experimentsWrap"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+const $ = sel => document.querySelector(sel);
+
+// Optional web password prompt. If the server returns 401, ask for a
+// password and store it in a cookie so page reloads keep working.
+async function authedFetch(url, opts = {}) {
+  opts.headers = opts.headers || {};
+  opts.headers['Content-Type'] = 'application/json';
+  const res = await fetch(url, opts);
+  if (res.status === 401) {
+    const pw = prompt('Cartographer is password-protected. Enter web password:');
+    if (pw !== null) {
+      document.cookie = 'cartographer_auth=' + pw + ';path=/;max-age=86400';
+      location.reload();
+    }
+    return res;
+  }
+  return res;
+}
+
+async function refresh() {
+  loadMachines();
+  loadExperiments();
+}
+
+async function loadMachines() {
+  const res = await authedFetch('/api/machines');
+  if (!res.ok) return;
+  const ms = await res.json();
+  $("#machinesBody").innerHTML = ms.map(m => `
+    <tr>
+      <td>${esc(m.machineId)}</td>
+      <td>${esc(m.harness || '')}</td>
+      <td>${dot(m.state)}</td>
+      <td class="mono small">${esc(m.branch || '')}</td>
+      <td class="small">${esc(m.repositoryPath || '')}</td>
+      <td class="small text-danger">${esc(m.lastError || '')}</td>
+    </tr>`).join('');
+}
+
+function dot(state) {
+  const cls = state === 'Ready' || state === 'Collected' ? 'dot-green'
+    : (state === 'Offline' || state === 'Error') ? 'dot-red'
+    : (state === 'Preparing' || state === 'Collecting') ? 'dot-orange'
+    : 'dot-gray';
+  return `<span class="status-dot ${cls}"></span>${esc(state)}`;
+}
+
+// ---- Experiments ------------------------------------------------------
+
+async function loadExperiments() {
+  const res = await authedFetch('/api/experiments');
+  if (!res.ok) return;
+  const exps = await res.json();
+  $("#experimentsWrap").innerHTML = exps.map(exp => renderExp(exp)).join('');
+}
+
+function renderExp(exp) {
+  const branch = branchName(exp);
+  const rows = exp.runs.map(r => `
+    <tr>
+      <td>${dotForRun(r)}</td>
+      <td>${esc(r.harness || '')}</td>
+      <td>
+        <select class="form-select form-select-sm" onchange="saveRun('${exp.id}','${r.machineId}','completion',this.value)">
+          <option value="" ${r.completion===''?'selected':''}>—</option>
+          <option value="Completed" ${r.completion==='Completed'?'selected':''}>Completed</option>
+          <option value="Aborted" ${r.completion==='Aborted'?'selected':''}>Aborted</option>
+        </select>
+      </td>
+      <td><input class="form-control form-control-sm" style="width:70px" type="number" step="0.5"
+           value="${r.score ?? ''}" onchange="saveRun('${exp.id}','${r.machineId}','score',this.value)"></td>
+      <td><input class="form-control form-control-sm" style="width:90px"
+           value="${esc(r.elapsedTime || '')}" placeholder="3:42"
+           onchange="saveRun('${exp.id}','${r.machineId}','elapsedTime',this.value)"></td>
+      <td><input class="form-control form-control-sm" style="width:90px"
+           value="${esc(r.tokens || '')}" placeholder="32000"
+           onchange="saveRun('${exp.id}','${r.machineId}','tokens',this.value)"></td>
+      <td>${esc(r.filesChanged ?? '')}</td>
+      <td class="text-success">+${esc(r.linesAdded ?? '')}</td>
+      <td class="text-danger">-${esc(r.linesDeleted ?? '')}</td>
+      <td>${esc((r.commitSha || '').slice(0,7))}</td>
+      <td><button class="btn btn-sm btn-outline-primary" onclick="toggleFiles('${exp.id}','${r.machineId}')">…</button></td>
+      <td class="small"><div class="d-flex">
+        <input class="form-control form-control-sm me-1" placeholder="notes"
+          value="${esc(r.notes || '')}" onchange="saveRun('${exp.id}','${r.machineId}','notes',this.value)">
+      </div></td>
+    </tr>
+    <tr class="files-row hidden" id="files-${exp.id}-${r.machineId}"><td colspan="12" class="small">
+      Changed files:<div class="mono">${esc((r.changedFiles||[]).join(', ') || '(none)')}</div>
+      <details><summary>Full diff</summary><pre class="mono small bg-white border p-2">${esc(r.diff||'(none)')}</pre></details>
+    </td></tr>`).join('');
+
+  return `
+  <div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>
+        <strong>${esc(exp.baseline)}</strong> · Task ${exp.taskNumber} · Attempt ${exp.attemptNumber}
+        <span class="text-muted small">(${esc(exp.id.slice(0,8))})</span>
+        <span class="ms-2 mono small text-info">${esc(branch)}</span>
+      </span>
+      <button class="btn btn-warning btn-sm" onclick="complete('${exp.id}')">Complete experiment</button>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm table-striped mb-0">
+          <thead><tr>
+            <th>State</th><th>Harness</th><th>Status</th><th>Score</th><th>Time</th><th>Tokens</th>
+            <th>Files</th><th>+Lines</th><th>-Lines</th><th>Commit</th><th></th><th>Notes</th>
+          </tr></thead>
+          <tbody>${rows || '<tr><td colspan="12" class="text-muted">No runs yet — agents collect when you click Complete.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card-footer small text-muted">Prompt: ${esc(exp.prompt || '')}</div>
+  </div>`;
+}
+
+// A run's state is empty before collection; show experiment command status if available.
+function dotForRun(r) { return dot(r.completion ? r.completion : (r.filesChanged !== undefined && r.collectedAtUtc ? 'Collected' : 'Pending')); }
+
+function branchName(exp) {
+  let tag = exp.baseline;
+  if (tag.startsWith('baseline')) tag = tag.slice(8);
+  return `${tag.toUpperCase()}-T${String(exp.taskNumber).padStart(3,'0')}-A${String(exp.attemptNumber).padStart(2,'0')}`;
+}
+
+function toggleFiles(expId, machineId) {
+  const el = $('#files-' + expId + '-' + machineId);
+  if (el) el.classList.toggle('hidden');
+}
+
+async function saveRun(expId, machineId, field, value) {
+  const payload = { [field]: field === 'score' ? (value === '' ? null : Number(value)) : value };
+  await authedFetch(`/api/experiments/${expId}/runs/${machineId}`, {
+    method: 'POST', body: JSON.stringify(payload)
+  });
+}
+
+async function complete(expId) {
+  if (!confirm('Send a collect command to every registered machine for this experiment?')) return;
+  const res = await authedFetch(`/api/experiments/${expId}/complete`, { method: 'POST' });
+  if (res.ok) refresh();
+}
+
+// ---- Start experiment -------------------------------------------------
+
+async function startExperiment() {
+  const payload = {
+    baseline: $("#baseline").value.trim(),
+    taskNumber: Number($("#task").value),
+    attemptNumber: Number($("#attempt").value),
+    prompt: $("#prompt").value
+  };
+  if (!payload.baseline || !payload.taskNumber || !payload.attemptNumber) {
+    alert('Baseline, task number, and attempt number are required.');
+    return;
+  }
+  const res = await authedFetch('/api/experiments/start', {
+    method: 'POST', body: JSON.stringify(payload)
+  });
+  if (res.ok) {
+    $("#prompt").value = '';
+    refresh();
+  }
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+$("#startBtn").addEventListener('click', startExperiment);
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

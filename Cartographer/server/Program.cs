@@ -1,0 +1,265 @@
+using System.Text.Json;
+using Cartographer;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Serve the static frontend from wwwroot.
+builder.WebHost.UseWebRoot(Path.Combine(builder.Environment.ContentRootPath, "wwwroot"));
+
+// Read configuration from environment / appsettings.
+string dataPath = Environment.GetEnvironmentVariable("CARTOGRAPHER_DATA") ?? "data.json";
+string apiKey = Environment.GetEnvironmentVariable("CARTOGRAPHER_API_KEY") ?? "";
+int offlineSeconds = int.Parse(Environment.GetEnvironmentVariable("CARTOGRAPHER_OFFLINE_SECONDS") ?? "90");
+string webPassword = Environment.GetEnvironmentVariable("CARTOGRAPHER_WEB_PASSWORD") ?? "";
+
+var app = builder.Build();
+
+var persistence = new Persistence(dataPath);
+var store = persistence.Load();
+
+app.UseDefaultFiles();
+app.UseStaticFiles();
+
+// ---- Helpers ----------------------------------------------------------
+
+bool Authorized(HttpRequest req) =>
+    apiKey.Length == 0 || (req.Headers["X-Api-Key"].FirstOrDefault() == apiKey);
+
+bool WebAuthorized(HttpRequest req) =>
+    webPassword.Length == 0 || (req.Headers["Cookie"].FirstOrDefault() ?? "").Contains("cartographer_auth=");
+
+// Build the branch name consistently across all machines.
+// baselineB001, task 4, attempt 2, harness openhands -> B001-T004-A02-openhands.
+static string BranchName(string baseline, int task, int attempt, string harness)
+{
+    var tag = baseline;
+    if (tag.StartsWith("baseline", StringComparison.OrdinalIgnoreCase))
+        tag = tag["baseline".Length..];
+    return $"{tag.ToUpperInvariant()}-T{task:000}-A{attempt:00}-{harness.ToLowerInvariant()}";
+}
+
+static bool IsOffline(DateTime? hb, int offlineSeconds) =>
+    hb == null || (DateTime.UtcNow - hb.Value).TotalSeconds > offlineSeconds;
+
+static string StateOf(Machine m, bool isOffline) => isOffline ? "Offline" : m.State;
+
+static object PublicMachine(Machine m, int offlineSeconds)
+{
+    bool off = IsOffline(m.LastHeartbeatUtc, offlineSeconds);
+    return new
+    {
+        m.MachineId, m.Harness, m.RepositoryPath, m.Branch,
+        State = StateOf(m, off), m.LastError, m.LastHeartbeatUtc, Online = !off
+    };
+}
+
+// ---- Web shell ---------------------------------------------------------
+
+// GET / shows index.html (served by DefaultFiles).
+
+// Returned when there is no work for an agent; agents ignore commands with no id.
+var NoCommand = new Command { Id = "" };
+
+// ---- Machine endpoints (agents) ----------------------------------------
+
+app.MapGet("/api/agents/{machineId}/command", (string machineId, HttpRequest req) =>
+{
+    if (!Authorized(req)) return Results.Unauthorized();
+
+    var m = store.Machines.FirstOrDefault(x => x.MachineId == machineId);
+    if (m == null) return Results.Json(NoCommand);
+
+    // The earliest pending command for this machine, in experiment order.
+    var cmd = store.Experiments
+        .OrderBy(e => e.CreatedAtUtc)
+        .SelectMany(e => e.Commands
+            .Where(c => c.MachineId == machineId && c.State == "Pending"))
+        .FirstOrDefault();
+
+    return Results.Json(cmd ?? NoCommand);
+});
+
+app.MapPost("/api/agents/{machineId}/heartbeat", (string machineId, Machine body, HttpRequest req) =>
+{
+    if (!Authorized(req)) return Results.Unauthorized();
+
+    var m = store.Machines.FirstOrDefault(x => x.MachineId == machineId);
+    if (m == null)
+    {
+        m = new Machine { MachineId = machineId };
+        store.Machines.Add(m);
+    }
+    m.Harness = body.Harness;
+    m.RepositoryPath = body.RepositoryPath;
+    m.Branch = body.Branch;
+    m.State = body.State;
+    m.LastError = body.LastError;
+    m.LastHeartbeatUtc = DateTime.UtcNow;
+    persistence.Save(store);
+    return Results.Ok();
+});
+
+// Body: { commandId, success, error, run? }
+app.MapPost("/api/agents/{machineId}/command-result", (string machineId, JsonElement body, HttpRequest req) =>
+{
+    if (!Authorized(req)) return Results.Unauthorized();
+
+    var cmdId = body.GetProperty("commandId").GetString() ?? "";
+    var success = body.TryGetProperty("success", out var s) && s.GetBoolean();
+    var err = body.TryGetProperty("error", out var e) && e.ValueKind == JsonValueKind.String ? e.GetString() : null;
+
+    var pair = store.Experiments
+        .SelectMany(exp => exp.Commands.Select(c => new { exp, c }))
+        .FirstOrDefault(x => x.c.Id == cmdId);
+    if (pair == null) return Results.NotFound();
+
+    pair.c.State = success ? "Complete" : "Failed";
+    pair.c.Error = err;
+
+    if (success && body.TryGetProperty("run", out var runEl) && pair.c.Type == "collect")
+    {
+        var run = JsonSerializer.Deserialize<Run>(runEl.GetRawText(), new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true
+        });
+        if (run != null)
+        {
+            var machine = store.Machines.FirstOrDefault(x => x.MachineId == machineId);
+            run.MachineId = machineId;
+            run.Harness ??= machine?.Harness;
+            var existing = pair.exp.Runs.FirstOrDefault(r => r.MachineId == machineId);
+            if (existing != null)
+            {
+                existing.Branch = run.Branch;
+                existing.CommitSha = run.CommitSha;
+                existing.FilesChanged = run.FilesChanged;
+                existing.FilesAdded = run.FilesAdded;
+                existing.FilesModified = run.FilesModified;
+                existing.FilesDeleted = run.FilesDeleted;
+                existing.LinesAdded = run.LinesAdded;
+                existing.LinesDeleted = run.LinesDeleted;
+                existing.RenameCount = run.RenameCount;
+                existing.ChangedFiles = run.ChangedFiles;
+                existing.Diff = run.Diff;
+                existing.CollectedAtUtc = DateTime.UtcNow;
+            }
+            else
+            {
+                run.CollectedAtUtc = DateTime.UtcNow;
+                pair.exp.Runs.Add(run);
+            }
+        }
+    }
+    persistence.Save(store);
+    return Results.Ok();
+});
+
+// ---- Dashboard endpoints (browser) --------------------------------------
+
+app.MapGet("/api/machines", (HttpRequest req) =>
+{
+    if (!WebAuthorized(req)) return Results.Unauthorized();
+    return Results.Json(store.Machines.Select(m => PublicMachine(m, offlineSeconds)));
+});
+
+app.MapGet("/api/experiments", (HttpRequest req) =>
+{
+    if (!WebAuthorized(req)) return Results.Unauthorized();
+    return Results.Json(store.Experiments.OrderByDescending(e => e.CreatedAtUtc));
+});
+
+app.MapGet("/api/experiments/{id}", (string id, HttpRequest req) =>
+{
+    if (!WebAuthorized(req)) return Results.Unauthorized();
+    var exp = store.Experiments.FirstOrDefault(e => e.Id == id);
+    return exp == null ? Results.NotFound() : Results.Json(exp);
+});
+
+// Body: { baseline, taskNumber, attemptNumber, prompt }
+app.MapPost("/api/experiments/start", (JsonElement body, HttpRequest req) =>
+{
+    if (!WebAuthorized(req)) return Results.Unauthorized();
+
+    var baseline = body.GetProperty("baseline").GetString() ?? "";
+    var task = body.TryGetProperty("taskNumber", out var t) ? t.GetInt32() : 0;
+    var attempt = body.TryGetProperty("attemptNumber", out var a) ? a.GetInt32() : 0;
+    var prompt = body.TryGetProperty("prompt", out var p) ? p.GetString() ?? "" : "";
+
+    if (baseline.Length == 0 || task < 1 || attempt < 1)
+        return Results.BadRequest("baseline, taskNumber, and attemptNumber are required.");
+
+    var exp = new Experiment { Baseline = baseline, TaskNumber = task, AttemptNumber = attempt, Prompt = prompt };
+
+    foreach (var m in store.Machines)
+    {
+        var harness = m.Harness ?? m.MachineId;
+        exp.Commands.Add(new Command
+        {
+            MachineId = m.MachineId,
+            Type = "prepare",
+            Baseline = baseline,
+            TaskNumber = task,
+            AttemptNumber = attempt,
+            Prompt = prompt,
+            BranchName = BranchName(baseline, task, attempt, harness)
+        });
+    }
+    store.Experiments.Add(exp);
+    persistence.Save(store);
+    return Results.Ok(exp);
+});
+
+// Ask every machine to collect its run for this experiment.
+app.MapPost("/api/experiments/{id}/complete", (string id, HttpRequest req) =>
+{
+    if (!WebAuthorized(req)) return Results.Unauthorized();
+
+    var exp = store.Experiments.FirstOrDefault(e => e.Id == id);
+    if (exp == null) return Results.NotFound();
+
+    foreach (var m in store.Machines)
+    {
+        exp.Commands.Add(new Command
+        {
+            MachineId = m.MachineId,
+            Type = "collect",
+            Baseline = exp.Baseline,
+            TaskNumber = exp.TaskNumber,
+            AttemptNumber = exp.AttemptNumber,
+            Prompt = exp.Prompt,
+            BranchName = BranchName(exp.Baseline, exp.TaskNumber, exp.AttemptNumber, m.Harness ?? m.MachineId)
+        });
+    }
+    persistence.Save(store);
+    return Results.Ok(exp);
+});
+
+// Update manually entered run fields. Body is a Run with partial fields.
+app.MapPost("/api/experiments/{id}/runs/{machineId}", (string id, string machineId, Run body, HttpRequest req) =>
+{
+    if (!WebAuthorized(req)) return Results.Unauthorized();
+
+    var exp = store.Experiments.FirstOrDefault(e => e.Id == id);
+    if (exp == null) return Results.NotFound();
+
+    var run = exp.Runs.FirstOrDefault(r => r.MachineId == machineId);
+    if (run == null)
+    {
+        run = new Run { MachineId = machineId };
+        exp.Runs.Add(run);
+    }
+    run.Harness = body.Harness ?? run.Harness;
+    run.Branch = body.Branch ?? run.Branch;
+    run.Baseline = body.Baseline ?? exp.Baseline;
+    run.TaskNumber = body.TaskNumber != 0 ? body.TaskNumber : exp.TaskNumber;
+    run.AttemptNumber = body.AttemptNumber != 0 ? body.AttemptNumber : exp.AttemptNumber;
+    run.Completion = body.Completion ?? run.Completion;
+    if (body.Score.HasValue) run.Score = body.Score;
+    run.ElapsedTime = body.ElapsedTime ?? run.ElapsedTime;
+    run.Tokens = body.Tokens ?? run.Tokens;
+    run.Notes = body.Notes ?? run.Notes;
+    persistence.Save(store);
+    return Results.Ok(run);
+});
+
+app.Run();

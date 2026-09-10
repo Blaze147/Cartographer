@@ -1,0 +1,8 @@
+# .NET build output
+server/bin/
+server/obj/
+server/data.json
+server/data.json.tmp
+
+# Swift build output
+macos-agent/.build/
