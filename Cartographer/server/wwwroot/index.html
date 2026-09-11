@@ -346,7 +346,15 @@ async function saveRun(expId, machineId, field, value) {
   const res = await authedFetch(`/api/experiments/${expId}/runs/${machineId}`, {
     method: 'POST', body: JSON.stringify(payload)
   });
-  if (res.ok) clearDirty(expId, machineId, field);
+  if (res.ok) {
+    clearDirty(expId, machineId, field);
+    // Re-sync the rendered snapshot with the now-confirmed server state. If we
+    // don't, an auto-refresh can rebuild this field from the pre-save snapshot
+    // and "wipe" the change back to its old value (e.g. Status flickering back
+    // to '—'). loadExperiments keeps typing/caret and expanded rows intact and
+    // skips work entirely when nothing else changed.
+    await loadExperiments();
+  }
 }
 
 async function complete(expId) {
