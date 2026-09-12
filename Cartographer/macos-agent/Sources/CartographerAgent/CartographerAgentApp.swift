@@ -19,8 +19,12 @@ struct CartographerAgentApp: App {
                     Text("Error: \(err)").foregroundColor(.red).font(.caption)
                 }
                 Divider()
+                // These two buttons act as a back-and-forth toggle across the
+                // experiment: Copy starts the run (status "Working"), Mark
+                // Ready aborts and re-arms it — exactly one is enabled at a
+                // time, and Copy also requires a prompt to copy.
                 Button("Copy Current Prompt") { agent.copyPrompt() }
-                    .disabled(agent.currentPrompt == nil)
+                    .disabled(agent.currentPrompt == nil || agent.status == "Working")
                 // Only useful mid-experiment: "copy prompt" kicked off the
                 // run, but you decided not to proceed, so re-arm the agent.
                 Button("Mark Ready") { agent.markReady() }
