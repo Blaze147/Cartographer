@@ -28,14 +28,26 @@ bool Authorized(HttpRequest req) =>
 bool WebAuthorized(HttpRequest req) =>
     webPassword.Length == 0 || (req.Headers["Cookie"].FirstOrDefault() ?? "").Contains("cartographer_auth=");
 
-// Build the branch name consistently across all machines.
-// baselineB001, task 4, attempt 2, harness openhands -> B001-T004-A02-openhands.
+// Build the branch name consistently across all machines, e.g. baseline
+// "baselineB004", task 1, attempt 1, harness "deepseek harness" ->
+// "b004/task-001/deepseek_harness/01".
+// Git branch names follow check-ref-format: no spaces, so whitespace in the
+// parts (harness names especially) is replaced with underscores.
 static string BranchName(string baseline, int task, int attempt, string harness)
 {
-    var tag = baseline;
+    var tag = baseline.Trim();
     if (tag.StartsWith("baseline", StringComparison.OrdinalIgnoreCase))
         tag = tag["baseline".Length..];
-    return $"{tag.ToUpperInvariant()}-T{task:000}-A{attempt:00}-{harness.ToLowerInvariant()}";
+    static string Safe(string s)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var c in s.Trim())
+            sb.Append(char.IsWhiteSpace(c) ? '_' : c);
+        return sb.ToString();
+    }
+    var t = Safe(tag).ToLowerInvariant();
+    var h = Safe(harness).ToLowerInvariant();
+    return $"{t}/task-{task:000}/{h}/{attempt:00}";
 }
 
 static bool IsOffline(DateTime? hb, int offlineSeconds) =>

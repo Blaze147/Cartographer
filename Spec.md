@@ -183,12 +183,13 @@ One experiment therefore contains multiple runs, normally one for each registere
 
 When a new experiment starts, every registered Mac should create its own branch.
 
-Use a predictable format:
+Use a predictable format (hierarchical, forward-slash separated, lowercase,
+whitespace replaced with underscores):
 
 ```text
-B001-T004-A02-openhands
-B001-T004-A02-claude
-B001-T004-A02-codex
+b001/task-004/openhands/02
+b001/task-004/claude/02
+b001/task-004/codex/02
 ```
 
 The branch name must contain:

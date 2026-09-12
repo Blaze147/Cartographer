@@ -224,10 +224,16 @@ function renderExp(exp) {
 // A run's state is empty before collection; show experiment command status if available.
 function dotForRun(r) { return dot(r.completion ? r.completion : (r.filesChanged !== undefined && r.collectedAtUtc ? 'Collected' : 'Pending')); }
 
+// Display the branch the server actually computed for this experiment —
+// the commands carry it per machine (machines may have different harnesses).
+// Fall back to the client-side scheme when commands data is absent.
 function branchName(exp) {
-  let tag = exp.baseline;
+  const fromCmd = (exp.commands && exp.commands[0] && exp.commands[0].branchName) || '';
+  if (fromCmd) return fromCmd;
+  let tag = exp.baseline.trim();
   if (tag.startsWith('baseline')) tag = tag.slice(8);
-  return `${tag.toUpperCase()}-T${String(exp.taskNumber).padStart(3,'0')}-A${String(exp.attemptNumber).padStart(2,'0')}`;
+  const safe = s => s.trim().replace(/\s+/g, '_').toLowerCase();
+  return `${safe(tag)}/task-${String(exp.taskNumber).padStart(3,'0')}/${safe(exp.harness || '')}/${String(exp.attemptNumber).padStart(2,'0')}`;
 }
 
 function toggleFiles(expId, machineId) {
