@@ -29,15 +29,18 @@ bool WebAuthorized(HttpRequest req) =>
     webPassword.Length == 0 || (req.Headers["Cookie"].FirstOrDefault() ?? "").Contains("cartographer_auth=");
 
 // Build the branch name consistently across all machines, e.g. baseline
-// "baselineB004", task 1, attempt 1, harness "deepseek harness" ->
-// "b004/task-001/deepseek_harness/01".
-// Git branch names follow check-ref-format: no spaces, so whitespace in the
-// parts (harness names especially) is replaced with underscores.
+// "baselineB004" or "baseline/b004", task 1, attempt 1, harness
+// "deepseek harness" -> "b004/task-001/deepseek_harness/01".
+// Git branch names follow check-ref-format: no spaces and no leading slash,
+// so whitespace in the parts (harness names especially) becomes underscores
+// and separators left over from the baseline word are stripped.
 static string BranchName(string baseline, int task, int attempt, string harness)
 {
     var tag = baseline.Trim();
     if (tag.StartsWith("baseline", StringComparison.OrdinalIgnoreCase))
         tag = tag["baseline".Length..];
+    // The new "baseline/bXXX" spelling leaves a leading separator behind.
+    tag = tag.TrimStart('/');
     static string Safe(string s)
     {
         var sb = new System.Text.StringBuilder();
