@@ -81,6 +81,7 @@ final class Agent: ObservableObject {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(prompt, forType: .string)
             status = "Working"
+            notifyStatusChange()
         }
     }
 
@@ -88,6 +89,16 @@ final class Agent: ObservableObject {
     /// decided not to proceed, or you want to re-run from the start).
     func markReady() {
         status = "Ready"
+        notifyStatusChange()
+    }
+
+    /// Fire an immediate heartbeat right after a user-driven status change
+    /// (Copy Current Prompt / Mark Ready), so the dashboard shows the new
+    /// status instantly instead of waiting out the next scheduled poll
+    /// (up to ~30s on the idle interval).
+    private func notifyStatusChange() {
+        guard config != nil else { return }
+        Task { await heartbeat() }
     }
 
     func openDashboard() {
