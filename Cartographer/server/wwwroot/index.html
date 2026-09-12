@@ -138,6 +138,9 @@ async function loadExperiments() {
   // exactly as they are instead of being wiped by the auto-refresh timer.
   if (snap === lastExperiments) return;
   lastExperiments = snap;
+  // Experiments arrive newest-first; use the latest one to default the
+  // next-experiment form.
+  applyStartFormDefaults(exps);
   captureCurrentFocus();
   captureExpandedState();
   $("#experimentsWrap").innerHTML = exps.map(exp => renderExp(exp)).join('');
@@ -366,6 +369,43 @@ async function complete(expId) {
   if (res.ok) refresh();
 }
 
+// ---- Start form defaults ----------------------------------------------
+
+// Defaults for the next experiment, taken from the most recent experiment:
+// same baseline, same task number, attempt_continue = last + 1.
+let lastExperimentDefaults = null;
+
+// Fields the user has explicitly edited keep their value; the auto-defaults
+// never fight with manual input.
+const startFormTouched = { baseline: false, task: false, attempt: false };
+
+function applyStartFormDefaults(exps) {
+  const last = exps && exps[0];
+  if (!last) return;
+  lastExperimentDefaults = last;
+  const taskEl = $("#task");
+  if (!startFormTouched.baseline) $("#baseline").value = last.baseline;
+  if (!startFormTouched.task) taskEl.value = last.taskNumber;
+  if (!startFormTouched.attempt) {
+    // If the user already steered the task number away from the last
+    // experiment's task (see the listener below), a new task starts the
+    // attempt counter at 1; otherwise continue with attempt + 1.
+    const taskChanged = startFormTouched.task && Number(taskEl.value) !== last.taskNumber;
+    $("#attempt").value = taskChanged ? 1 : last.attemptNumber + 1;
+  }
+}
+
+// Changing the task number to something other than the last experiment's
+// task means the user is starting a fresh task: reset the attempt counter.
+$("#task").addEventListener('input', () => {
+  const d = lastExperimentDefaults;
+  if (d && Number($("#task").value) !== d.taskNumber) $("#attempt").value = 1;
+});
+
+['baseline', 'task', 'attempt'].forEach(id => {
+  $("#"+id).addEventListener('input', () => { startFormTouched[id] = true; });
+});
+
 // ---- Start experiment -------------------------------------------------
 
 async function startExperiment() {
@@ -384,6 +424,9 @@ async function startExperiment() {
   });
   if (res.ok) {
     $("#prompt").value = '';
+    // The new experiment is now the "latest": clear user-touch flags so the
+    // defaults roll forward (baseline, task, attempt+1) from it.
+    startFormTouched.baseline = startFormTouched.task = startFormTouched.attempt = false;
     refresh();
   }
 }
