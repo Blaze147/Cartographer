@@ -126,8 +126,13 @@ final class Agent: ObservableObject {
 
     private func runOnce() async {
         guard config != nil else { return }
-        await heartbeat()
+        // Talk to the server first, then report over the heartbeat. The
+        // command poll acts as the connection probe: if the server is now
+        // reachable, any stale reachability error from a previous cycle is
+        // cleared *before* the heartbeat goes out, so the UI never shows a
+        // stale "Cannot reach server" for a whole extra cycle.
         await processCommandIfAny()
+        await heartbeat()
     }
 
     // ---- HTTP helpers -------------------------------------------------
@@ -149,6 +154,16 @@ final class Agent: ObservableObject {
 
     // ---- Heartbeat ----------------------------------------------------
 
+    private func clearReachabilityError() {
+        // Connection came back: a persistent config/processing error still
+        // deserves its "Error" status, but a stale reachability blip
+        // ("Cannot reach server: ...") should disappear immediately.
+        if status == "Error", lastError?.hasPrefix("Cannot reach server") == true {
+            status = "Idle"
+            lastError = nil
+        }
+    }
+
     private func heartbeat() async {
         guard let config else { return }
         struct HB: Encodable {
@@ -158,7 +173,16 @@ final class Agent: ObservableObject {
         let body = HB(machineId: config.machineId, harness: config.harness,
                       repositoryPath: repoDir, branch: branch, state: status,
                       lastError: lastError)
-        _ = try? await request("/api/agents/\(config.machineId)/heartbeat", "POST", body: body)
+        do {
+            _ = try await request("/api/agents/\(config.machineId)/heartbeat", "POST", body: body)
+            // The heartbeat is its own proof of reachability; also clear any
+            // stale reachability error here instead of silently swallowing
+            // the result.
+            clearReachabilityError()
+        } catch {
+            status = "Error"
+            lastError = "Cannot reach server: \(error.localizedDescription)"
+        }
     }
 
     // ---- Command processing -------------------------------------------
@@ -173,10 +197,7 @@ final class Agent: ObservableObject {
                 // The server is reachable with nothing to do: clear any
                 // transient reachability error so a fresh launch (or a brief
                 // blip) doesn't leave the agent stuck showing "Error".
-                if status == "Error" {
-                    status = "Idle"
-                    lastError = nil
-                }
+                clearReachabilityError()
                 return
             }
             processed.insert(cmd.id)
@@ -221,6 +242,39 @@ final class Agent: ObservableObject {
         }
         _ = try? await request("/api/agents/\(config.machineId)/command-result", "POST",
                                body: Body(commandId: commandId, success: success, error: error, run: run))
+    }
+
+    // ---- Shutdown -------------------------------------------------------
+
+    /// Called on normal termination (menu Quit, Cmd+Q, or a termination
+    /// signal). Sends one final "Stopped" heartbeat so the server can show a
+    /// deliberate shutdown instead of waiting out the offline timer. This
+    /// must run synchronously with a short timeout because the process is on
+    /// its way out; a best-effort send is enough — the offline override
+    /// catches it if the server happens to be unreachable at this moment.
+    func farewell() {
+        guard let config else { return }
+        struct HB: Encodable {
+            var machineId: String, harness: String, repositoryPath: String
+            var branch: String, state: String, lastError: String?
+        }
+        var req = URLRequest(url: URL(string: "/api/agents/\(config.machineId)/heartbeat",
+                                      relativeTo: config.baseURL)!)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if !config.apiKey.isEmpty {
+            req.setValue(config.apiKey, forHTTPHeaderField: "X-Api-Key")
+        }
+        req.timeoutInterval = 2
+        let body = HB(machineId: config.machineId, harness: config.harness,
+                      repositoryPath: repoDir, branch: branch, state: "Stopped",
+                      lastError: nil)
+        if let data = try? JSONEncoder().encode(body) {
+            req.httpBody = data
+        }
+        let sem = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: req) { _, _, _ in sem.signal() }.resume()
+        _ = sem.wait(timeout: .now() + 2)
     }
 
     // ---- Git helpers --------------------------------------------------

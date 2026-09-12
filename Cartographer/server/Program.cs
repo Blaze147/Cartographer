@@ -41,11 +41,18 @@ static string BranchName(string baseline, int task, int attempt, string harness)
 static bool IsOffline(DateTime? hb, int offlineSeconds) =>
     hb == null || (DateTime.UtcNow - hb.Value).TotalSeconds > offlineSeconds;
 
-static string StateOf(Machine m, bool isOffline) => isOffline ? "Offline" : m.State;
+// State shown to the web UI. If the agent announced a clean shutdown
+// ("Stopped"), that state stays put: the farewell heartbeat means the agent
+// went down gracefully and nothing newer will arrive until it starts again.
+// For every other state, silence is the only evidence we get — the machine
+// crashed, lost power or lost its network — so after the offline window the
+// last reported state is overridden with "Offline".
+static string StateOf(Machine m, bool isOffline) =>
+    (isOffline && m.State != "Stopped") ? "Offline" : m.State;
 
 static object PublicMachine(Machine m, int offlineSeconds)
 {
-    bool off = IsOffline(m.LastHeartbeatUtc, offlineSeconds);
+    bool off = IsOffline(m.LastHeartbeatUtc, offlineSeconds) && m.State != "Stopped";
     return new
     {
         m.MachineId, m.Harness, m.RepositoryPath, m.Branch,

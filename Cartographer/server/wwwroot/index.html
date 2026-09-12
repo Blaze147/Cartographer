@@ -114,6 +114,9 @@ async function loadMachines() {
 }
 
 function dot(state) {
+  // Green: agent ran and finished. Red: error or lost heartbeat (crash,
+  // network drop, power loss). Orange: actively working. Gray: idle or a
+  // clean shutdown reported by the agent itself (agent said "Stopped").
   const cls = state === 'Ready' || state === 'Collected' ? 'dot-green'
     : (state === 'Offline' || state === 'Error') ? 'dot-red'
     : (state === 'Preparing' || state === 'Collecting') ? 'dot-orange'
@@ -163,12 +166,12 @@ function renderExp(exp) {
            onkeydown="enterBlur(event)"
            onchange="saveRun('${exp.id}','${r.machineId}','score',this.value)"></td>
       <td><input id="f-${exp.id}-${r.machineId}-elapsedTime" data-exp="${exp.id}" data-mach="${r.machineId}" data-field="elapsedTime" class="form-control form-control-sm" style="width:90px"
-           value="${esc(r.elapsedTime || '')}" placeholder="3:42"
+           value="${esc(r.elapsedTime || '')}" placeholder="?:??"
            oninput="markDirty('${exp.id}','${r.machineId}','elapsedTime',this.value)"
            onkeydown="enterBlur(event)"
            onchange="saveRun('${exp.id}','${r.machineId}','elapsedTime',this.value)"></td>
       <td><input id="f-${exp.id}-${r.machineId}-tokens" data-exp="${exp.id}" data-mach="${r.machineId}" data-field="tokens" class="form-control form-control-sm" style="width:90px"
-           value="${esc(r.tokens || '')}" placeholder="32000"
+           value="${esc(r.tokens || '')}" placeholder="?"
            oninput="markDirty('${exp.id}','${r.machineId}','tokens',this.value)"
            onkeydown="enterBlur(event)"
            onchange="saveRun('${exp.id}','${r.machineId}','tokens',this.value)"></td>

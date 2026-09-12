@@ -37,9 +37,27 @@ struct CartographerAgentApp: App {
     }
 }
 
-/// Kicks off the agent loop once the app has finished launching.
+/// Kicks off the agent loop once the app has finished launching, and makes
+/// sure a normal exit (Quit button, Cmd+Q, or a SIGTERM/SIGINT from the
+/// command line) tells the server the agent is shutting down cleanly.
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var signalSources: [DispatchSourceSignal] = []
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         Task { await Agent.shared.start() }
+        // Route termination signals onto the main queue (signal handlers may
+        // not touch AppKit/URLSession directly), where a normal terminate()
+        // runs and triggers applicationWillTerminate's farewell heartbeat.
+        for sig in [SIGTERM, SIGINT] {
+            signal(sig, SIG_IGN)  // handled by the dispatch source below
+            let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+            src.setEventHandler { NSApplication.shared.terminate(nil) }
+            src.resume()
+            signalSources.append(src)
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        Agent.shared.farewell()
     }
 }
