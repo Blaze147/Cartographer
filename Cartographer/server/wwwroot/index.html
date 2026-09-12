@@ -36,7 +36,7 @@
       <div class="row g-2">
         <div class="col-md-3">
           <label class="form-label small">Baseline tag</label>
-          <input id="baseline" class="form-control form-control-sm" value="baselineB001" placeholder="baselineB001">
+          <input id="baseline" class="form-control form-control-sm" value="baseline/b001" placeholder="baseline/b001">
         </div>
         <div class="col-md-2">
           <label class="form-label small">Task number</label>
@@ -271,6 +271,8 @@ function branchName(exp) {
   if (fromCmd) return fromCmd;
   let tag = exp.baseline.trim();
   if (tag.startsWith('baseline')) tag = tag.slice(8);
+  // The new "baseline/bXXX" spelling leaves a leading separator behind.
+  tag = tag.replace(/^[/\s]+/, '');
   const safe = s => s.trim().replace(/\s+/g, '_').toLowerCase();
   return `${safe(tag)}/task-${String(exp.taskNumber).padStart(3,'0')}/${safe(exp.harness || '')}/${String(exp.attemptNumber).padStart(2,'0')}`;
 }
