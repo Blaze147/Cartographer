@@ -182,8 +182,7 @@ function renderExp(exp) {
            onkeydown="enterBlur(event)"
            onchange="saveRun('${exp.id}','${r.machineId}','tokens',this.value)"></td>
       <td>${filesCell(r)}</td>
-      <td class="text-success">+${esc(r.linesAdded ?? '')}</td>
-      <td class="text-danger">-${esc(r.linesDeleted ?? '')}</td>
+      <td>${linesCell(r)}</td>
       <td><button class="btn btn-sm btn-outline-primary" onclick="toggleFiles('${exp.id}','${r.machineId}')">…</button></td>
       <td class="small"><div class="d-flex">
         <input id="f-${exp.id}-${r.machineId}-notes" data-exp="${exp.id}" data-mach="${r.machineId}" data-field="notes" class="form-control form-control-sm me-1" placeholder="notes"
@@ -193,7 +192,7 @@ function renderExp(exp) {
           onchange="saveRun('${exp.id}','${r.machineId}','notes',this.value)">
       </div></td>
     </tr>
-    <tr class="files-row hidden" id="files-${exp.id}-${r.machineId}"><td colspan="11" class="small">
+    <tr class="files-row hidden" id="files-${exp.id}-${r.machineId}"><td colspan="10" class="small">
       Changed files:<div class="mono">${esc((r.changedFiles||[]).join(', ') || '(none)')}</div>
       <details id="detail-${exp.id}-${r.machineId}"><summary>Full diff</summary><pre class="mono small bg-white border p-2">${esc(r.diff||'(none)')}</pre></details>
     </td></tr>`).join('');
@@ -213,9 +212,9 @@ function renderExp(exp) {
         <table class="table table-sm table-striped mb-0">
           <thead><tr>
             <th>State</th><th>Harness</th><th>Status</th><th>Score</th><th>Time</th><th>Tokens</th>
-            <th>Files</th><th>+Lines</th><th>-Lines</th><th></th><th>Notes</th>
+            <th>Files</th><th>Lines</th><th></th><th>Notes</th>
           </tr></thead>
-          <tbody>${rows || '<tr><td colspan="12" class="text-muted">No runs yet — agents collect when you click Complete.</td></tr>'}</tbody>
+          <tbody>${rows || '<tr><td colspan="10" class="text-muted">No runs yet — agents collect when you click Complete.</td></tr>'}</tbody>
         </table>
       </div>
     </div>
@@ -236,7 +235,7 @@ function dotForRun(r) {
 // The "Files" column: total files affected, followed by the add/modify/
 // delete breakdown as soon as collection data exists. Counts are absent
 // before collection, so just show nothing there (like the other git-stat
-// columns). Unicode ≈ / − keep the breakdown visually light.
+// columns). Unicode ~ / − keep the breakdown visually light.
 function filesCell(r) {
   if (r.filesChanged === undefined || r.filesChanged === null) return '';
   // Only render a breakdown once collection filled it in: git reports
@@ -247,9 +246,21 @@ function filesCell(r) {
   if (!known) return `${esc(r.filesChanged)}`;
   const b = [];
   if (r.filesAdded) b.push(`<span class="fl-added">+${r.filesAdded}</span>`);
-  if (r.filesModified) b.push(`<span class="fl-modified">≈${r.filesModified}</span>`);
+  if (r.filesModified) b.push(`<span class="fl-modified">~${r.filesModified}</span>`);
   if (r.filesDeleted) b.push(`<span class="fl-deleted">−${r.filesDeleted}</span>`);
   return `${esc(r.filesChanged)}${b.length ? ` <span class="text-muted small">(${b.join(' ')})</span>` : ''}`;
+}
+
+// The "Lines" column: line additions and deletions condensed into one
+// color-coded cell (+N green, −N red), matching the Files breakdown.
+function linesCell(r) {
+  const a = r.linesAdded, d = r.linesDeleted;
+  if (a === undefined || a === null) return '';
+  const b = [];
+  if (a) b.push(`<span class="fl-added">+${a}</span>`);
+  if (d) b.push(`<span class="fl-deleted">−${d}</span>`);
+  if (!b.length) return '<span class="text-muted small">0</span>';
+  return b.join(' ');
 }
 
 // Display the branch the server actually computed for this experiment —

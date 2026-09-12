@@ -47,12 +47,15 @@ final class Agent: ObservableObject {
     private var processed = Set<String>()
     private var repoDir = ""
 
-    /// Menu-bar icon reflects the agent state: green ready, orange working,
-    /// red error, gray idle.
+    /// Menu-bar icon reflects the agent state: green clipboard ready, orange
+    /// gears working, orange spinner during the fast prepare/collect steps,
+    /// red error, green check when collected, gray idle.
     var iconName: String {
         switch status {
-        case "Ready", "Collected": return "checkmark.circle.fill"
-        case "Preparing", "Collecting", "Working": return "arrow.triangle.2.circlepath"
+        case "Collected": return "checkmark.circle.fill"
+        case "Ready": return "doc.on.clipboard.fill"
+        case "Working": return "gearshape.2.fill"
+        case "Preparing", "Collecting": return "arrow.triangle.2.circlepath"
         case "Error", "Offline": return "exclamationmark.triangle.fill"
         default: return "circle"
         }
