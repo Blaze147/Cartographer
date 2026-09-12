@@ -173,10 +173,15 @@ app.MapPost("/api/agents/{machineId}/command-result", (string machineId, JsonEle
                 existing.ChangedFiles = run.ChangedFiles;
                 existing.Diff = run.Diff;
                 existing.CollectedAtUtc = DateTime.UtcNow;
+                // The heartbeat mirror no longer touches collected rows, so
+                // set the final state here; the dot shows "Collected" even
+                // before the agent's follow-up heartbeat would arrive.
+                existing.AgentState = "Collected";
             }
             else
             {
                 run.CollectedAtUtc = DateTime.UtcNow;
+                run.AgentState = "Collected";
                 pair.exp.Runs.Add(run);
             }
         }
