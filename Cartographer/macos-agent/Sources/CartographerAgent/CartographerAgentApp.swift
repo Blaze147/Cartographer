@@ -27,7 +27,7 @@ struct CartographerAgentApp: App {
                     .disabled(agent.currentPrompt == nil || agent.status == "Working")
                 // Only useful mid-experiment: "copy prompt" kicked off the
                 // run, but you decided not to proceed, so re-arm the agent.
-                Button("Mark Ready") { agent.markReady() }
+                Button("Revert -> Ready") { agent.markReady() }
                     .disabled(agent.status != "Working")
                 Button("Open Dashboard") { agent.openDashboard() }
                 Button("Refresh") { Task { await agent.refresh() } }
