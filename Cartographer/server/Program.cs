@@ -272,7 +272,11 @@ app.MapPost("/api/experiments/{id}/runs/{machineId}", (string id, string machine
     run.Baseline = body.Baseline ?? exp.Baseline;
     run.TaskNumber = body.TaskNumber != 0 ? body.TaskNumber : exp.TaskNumber;
     run.AttemptNumber = body.AttemptNumber != 0 ? body.AttemptNumber : exp.AttemptNumber;
-    run.Completion = body.Completion ?? run.Completion;
+    // Run.Completion defaults to "" (non-nullable), so an update that only
+    // touches other fields arrives with Completion == "" rather than null —
+    // treat empty as "not provided" instead of wiping a saved value back to
+    // the placeholder '—'.
+    run.Completion = string.IsNullOrEmpty(body.Completion) ? run.Completion : body.Completion;
     if (body.Score.HasValue) run.Score = body.Score;
     run.ElapsedTime = body.ElapsedTime ?? run.ElapsedTime;
     run.Tokens = body.Tokens ?? run.Tokens;
