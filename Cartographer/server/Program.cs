@@ -115,14 +115,19 @@ app.MapPost("/api/agents/{machineId}/heartbeat", (string machineId, Machine body
     m.LastError = body.LastError;
     m.LastHeartbeatUtc = DateTime.UtcNow;
 
-    // Keep the experiment tables live: mirror the agent's current state onto
-    // any run row this machine has that hasn't been collected yet. Once a run
-    // has real collected data the collected values take priority in the UI.
-    if (!string.IsNullOrEmpty(m.State))
+    // Keep the experiment tables live — but only for the run rows that
+    // actually belong to where the agent is right now. The heartbeat carries
+    // the branch the agent is currently on, so the mirror compares it against
+    // each row's own branch: stale/incomplete experiments (which have their
+    // own branch names) keep the state they last had when the agent left them
+    // instead of riding along with whatever the agent does next.
+    if (!string.IsNullOrEmpty(m.State) && !string.IsNullOrEmpty(m.Branch))
     {
         foreach (var exp in store.Experiments)
         {
-            var run = exp.Runs.FirstOrDefault(r => r.MachineId == machineId && r.CollectedAtUtc == null);
+            var run = exp.Runs.FirstOrDefault(r => r.MachineId == machineId
+                && r.CollectedAtUtc == null
+                && r.Branch == m.Branch);
             if (run != null) run.AgentState = m.State;
         }
     }
@@ -229,6 +234,7 @@ app.MapPost("/api/experiments/start", (JsonElement body, HttpRequest req) =>
     foreach (var m in store.Machines)
     {
         var harness = m.Harness ?? m.MachineId;
+        var branchName = BranchName(baseline, task, attempt, harness);
         exp.Commands.Add(new Command
         {
             MachineId = m.MachineId,
@@ -237,7 +243,7 @@ app.MapPost("/api/experiments/start", (JsonElement body, HttpRequest req) =>
             TaskNumber = task,
             AttemptNumber = attempt,
             Prompt = prompt,
-            BranchName = BranchName(baseline, task, attempt, harness)
+            BranchName = branchName
         });
 
         // Seed a placeholder run row right away so each machine's entry shows
@@ -245,6 +251,8 @@ app.MapPost("/api/experiments/start", (JsonElement body, HttpRequest req) =>
         // instead of only once "Complete" triggers its collect result. The
         // collect path (find-or-create) and the manual save path both target
         // an existing row by machine id, so they fill this row in in place.
+        // The row carries its branch name up front, which is what the
+        // heartbeat-state mirror matches on.
         if (!exp.Runs.Any(r => r.MachineId == m.MachineId))
         {
             exp.Runs.Add(new Run
@@ -254,7 +262,11 @@ app.MapPost("/api/experiments/start", (JsonElement body, HttpRequest req) =>
                 TaskNumber = task,
                 AttemptNumber = attempt,
                 Harness = harness,
-                AgentState = m.State
+                Branch = branchName,
+                // Seed with the live machine state only if the machine is
+                // actually already on this run's branch; otherwise "Pending"
+                // until the heartbeat mirror takes over after prepare.
+                AgentState = m.Branch == branchName ? m.State : "Pending"
             });
         }
     }
