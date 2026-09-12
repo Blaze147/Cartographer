@@ -181,7 +181,6 @@ function renderExp(exp) {
       <td>${esc(r.filesChanged ?? '')}</td>
       <td class="text-success">+${esc(r.linesAdded ?? '')}</td>
       <td class="text-danger">-${esc(r.linesDeleted ?? '')}</td>
-      <td>${esc((r.commitSha || '').slice(0,7))}</td>
       <td><button class="btn btn-sm btn-outline-primary" onclick="toggleFiles('${exp.id}','${r.machineId}')">…</button></td>
       <td class="small"><div class="d-flex">
         <input id="f-${exp.id}-${r.machineId}-notes" data-exp="${exp.id}" data-mach="${r.machineId}" data-field="notes" class="form-control form-control-sm me-1" placeholder="notes"
@@ -191,7 +190,7 @@ function renderExp(exp) {
           onchange="saveRun('${exp.id}','${r.machineId}','notes',this.value)">
       </div></td>
     </tr>
-    <tr class="files-row hidden" id="files-${exp.id}-${r.machineId}"><td colspan="12" class="small">
+    <tr class="files-row hidden" id="files-${exp.id}-${r.machineId}"><td colspan="11" class="small">
       Changed files:<div class="mono">${esc((r.changedFiles||[]).join(', ') || '(none)')}</div>
       <details id="detail-${exp.id}-${r.machineId}"><summary>Full diff</summary><pre class="mono small bg-white border p-2">${esc(r.diff||'(none)')}</pre></details>
     </td></tr>`).join('');
@@ -211,7 +210,7 @@ function renderExp(exp) {
         <table class="table table-sm table-striped mb-0">
           <thead><tr>
             <th>State</th><th>Harness</th><th>Status</th><th>Score</th><th>Time</th><th>Tokens</th>
-            <th>Files</th><th>+Lines</th><th>-Lines</th><th>Commit</th><th></th><th>Notes</th>
+            <th>Files</th><th>+Lines</th><th>-Lines</th><th></th><th>Notes</th>
           </tr></thead>
           <tbody>${rows || '<tr><td colspan="12" class="text-muted">No runs yet — agents collect when you click Complete.</td></tr>'}</tbody>
         </table>
@@ -413,6 +412,17 @@ function applyStartFormDefaults(exps) {
 $("#task").addEventListener('input', () => {
   const d = lastExperimentDefaults;
   if (d && Number($("#task").value) !== d.taskNumber) $("#attempt").value = 1;
+});
+
+// A new baseline tag means numbers must not carry over from the old
+// baseline: reset task and attempt counters to 1. Touching the fields here
+// keeps the auto-defaults from overwriting the reset with values derived
+// from the previous experiment.
+$("#baseline").addEventListener('input', () => {
+  $("#task").value = 1;
+  $("#attempt").value = 1;
+  startFormTouched.task = true;
+  startFormTouched.attempt = true;
 });
 
 ['baseline', 'task', 'attempt'].forEach(id => {
