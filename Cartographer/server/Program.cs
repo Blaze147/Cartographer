@@ -28,24 +28,43 @@ bool Authorized(HttpRequest req) =>
 bool WebAuthorized(HttpRequest req) =>
     webPassword.Length == 0 || (req.Headers["Cookie"].FirstOrDefault() ?? "").Contains("cartographer_auth=");
 
-// Build the branch name consistently across all machines.
-// baselineB001, task 4, attempt 2, harness openhands -> B001-T004-A02-openhands.
+// Build the branch name consistently across all machines, e.g. baseline
+// "baselineB004", task 1, attempt 1, harness "deepseek harness" ->
+// "b004/task-001/deepseek_harness/01".
+// Git branch names follow check-ref-format: no spaces, so whitespace in the
+// parts (harness names especially) is replaced with underscores.
 static string BranchName(string baseline, int task, int attempt, string harness)
 {
-    var tag = baseline;
+    var tag = baseline.Trim();
     if (tag.StartsWith("baseline", StringComparison.OrdinalIgnoreCase))
         tag = tag["baseline".Length..];
-    return $"{tag.ToUpperInvariant()}-T{task:000}-A{attempt:00}-{harness.ToLowerInvariant()}";
+    static string Safe(string s)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var c in s.Trim())
+            sb.Append(char.IsWhiteSpace(c) ? '_' : c);
+        return sb.ToString();
+    }
+    var t = Safe(tag).ToLowerInvariant();
+    var h = Safe(harness).ToLowerInvariant();
+    return $"{t}/task-{task:000}/{h}/{attempt:00}";
 }
 
 static bool IsOffline(DateTime? hb, int offlineSeconds) =>
     hb == null || (DateTime.UtcNow - hb.Value).TotalSeconds > offlineSeconds;
 
-static string StateOf(Machine m, bool isOffline) => isOffline ? "Offline" : m.State;
+// State shown to the web UI. If the agent announced a clean shutdown
+// ("Stopped"), that state stays put: the farewell heartbeat means the agent
+// went down gracefully and nothing newer will arrive until it starts again.
+// For every other state, silence is the only evidence we get — the machine
+// crashed, lost power or lost its network — so after the offline window the
+// last reported state is overridden with "Offline".
+static string StateOf(Machine m, bool isOffline) =>
+    (isOffline && m.State != "Stopped") ? "Offline" : m.State;
 
 static object PublicMachine(Machine m, int offlineSeconds)
 {
-    bool off = IsOffline(m.LastHeartbeatUtc, offlineSeconds);
+    bool off = IsOffline(m.LastHeartbeatUtc, offlineSeconds) && m.State != "Stopped";
     return new
     {
         m.MachineId, m.Harness, m.RepositoryPath, m.Branch,
@@ -95,6 +114,23 @@ app.MapPost("/api/agents/{machineId}/heartbeat", (string machineId, Machine body
     m.State = body.State;
     m.LastError = body.LastError;
     m.LastHeartbeatUtc = DateTime.UtcNow;
+
+    // Keep the experiment tables live — but only for the run rows that
+    // actually belong to where the agent is right now. The heartbeat carries
+    // the branch the agent is currently on, so the mirror compares it against
+    // each row's own branch: stale/incomplete experiments (which have their
+    // own branch names) keep the state they last had when the agent left them
+    // instead of riding along with whatever the agent does next.
+    if (!string.IsNullOrEmpty(m.State) && !string.IsNullOrEmpty(m.Branch))
+    {
+        foreach (var exp in store.Experiments)
+        {
+            var run = exp.Runs.FirstOrDefault(r => r.MachineId == machineId
+                && r.CollectedAtUtc == null
+                && r.Branch == m.Branch);
+            if (run != null) run.AgentState = m.State;
+        }
+    }
     persistence.Save(store);
     return Results.Ok();
 });
@@ -142,10 +178,15 @@ app.MapPost("/api/agents/{machineId}/command-result", (string machineId, JsonEle
                 existing.ChangedFiles = run.ChangedFiles;
                 existing.Diff = run.Diff;
                 existing.CollectedAtUtc = DateTime.UtcNow;
+                // The heartbeat mirror no longer touches collected rows, so
+                // set the final state here; the dot shows "Collected" even
+                // before the agent's follow-up heartbeat would arrive.
+                existing.AgentState = "Collected";
             }
             else
             {
                 run.CollectedAtUtc = DateTime.UtcNow;
+                run.AgentState = "Collected";
                 pair.exp.Runs.Add(run);
             }
         }
@@ -193,6 +234,7 @@ app.MapPost("/api/experiments/start", (JsonElement body, HttpRequest req) =>
     foreach (var m in store.Machines)
     {
         var harness = m.Harness ?? m.MachineId;
+        var branchName = BranchName(baseline, task, attempt, harness);
         exp.Commands.Add(new Command
         {
             MachineId = m.MachineId,
@@ -201,8 +243,32 @@ app.MapPost("/api/experiments/start", (JsonElement body, HttpRequest req) =>
             TaskNumber = task,
             AttemptNumber = attempt,
             Prompt = prompt,
-            BranchName = BranchName(baseline, task, attempt, harness)
+            BranchName = branchName
         });
+
+        // Seed a placeholder run row right away so each machine's entry shows
+        // up in the experiment table from the moment the experiment starts,
+        // instead of only once "Complete" triggers its collect result. The
+        // collect path (find-or-create) and the manual save path both target
+        // an existing row by machine id, so they fill this row in in place.
+        // The row carries its branch name up front, which is what the
+        // heartbeat-state mirror matches on.
+        if (!exp.Runs.Any(r => r.MachineId == m.MachineId))
+        {
+            exp.Runs.Add(new Run
+            {
+                MachineId = m.MachineId,
+                Baseline = baseline,
+                TaskNumber = task,
+                AttemptNumber = attempt,
+                Harness = harness,
+                Branch = branchName,
+                // Seed with the live machine state only if the machine is
+                // actually already on this run's branch; otherwise "Pending"
+                // until the heartbeat mirror takes over after prepare.
+                AgentState = m.Branch == branchName ? m.State : "Pending"
+            });
+        }
     }
     store.Experiments.Add(exp);
     persistence.Save(store);
@@ -253,7 +319,11 @@ app.MapPost("/api/experiments/{id}/runs/{machineId}", (string id, string machine
     run.Baseline = body.Baseline ?? exp.Baseline;
     run.TaskNumber = body.TaskNumber != 0 ? body.TaskNumber : exp.TaskNumber;
     run.AttemptNumber = body.AttemptNumber != 0 ? body.AttemptNumber : exp.AttemptNumber;
-    run.Completion = body.Completion ?? run.Completion;
+    // Run.Completion defaults to "" (non-nullable), so an update that only
+    // touches other fields arrives with Completion == "" rather than null —
+    // treat empty as "not provided" instead of wiping a saved value back to
+    // the placeholder '—'.
+    run.Completion = string.IsNullOrEmpty(body.Completion) ? run.Completion : body.Completion;
     if (body.Score.HasValue) run.Score = body.Score;
     run.ElapsedTime = body.ElapsedTime ?? run.ElapsedTime;
     run.Tokens = body.Tokens ?? run.Tokens;

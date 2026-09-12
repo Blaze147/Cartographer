@@ -47,11 +47,14 @@ final class Agent: ObservableObject {
     private var processed = Set<String>()
     private var repoDir = ""
 
-    /// Menu-bar icon reflects the agent state: green ready, orange working,
-    /// red error, gray idle.
+    /// Menu-bar icon reflects the agent state: green clipboard ready, orange
+    /// gears working, orange spinner during the fast prepare/collect steps,
+    /// red error, green check when collected, gray idle.
     var iconName: String {
         switch status {
-        case "Ready", "Collected": return "checkmark.circle.fill"
+        case "Collected": return "checkmark.circle.fill"
+        case "Ready": return "doc.on.clipboard.fill"
+        case "Working": return "gearshape.2.fill"
         case "Preparing", "Collecting": return "arrow.triangle.2.circlepath"
         case "Error", "Offline": return "exclamationmark.triangle.fill"
         default: return "circle"
@@ -61,7 +64,7 @@ final class Agent: ObservableObject {
     var iconColor: Color {
         switch status {
         case "Ready", "Collected": return .green
-        case "Preparing", "Collecting": return .orange
+        case "Preparing", "Collecting", "Working": return .orange
         case "Error", "Offline": return .red
         default: return .gray
         }
@@ -69,12 +72,33 @@ final class Agent: ObservableObject {
 
     var configHarness: String { config?.harness ?? "—" }
 
-    /// Copy the current experiment prompt to the clipboard.
+    /// Copy the current experiment prompt to the clipboard, and mark the agent
+    /// as underway. Copying the prompt is the signal that you've begun the run
+    /// with the harness, so the status moves off "Ready" (it will be superseded
+    /// later by a "collect" command when you Complete the experiment).
     func copyPrompt() {
         if let prompt = currentPrompt {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(prompt, forType: .string)
+            status = "Working"
+            notifyStatusChange()
         }
+    }
+
+    /// Manually return to the "Ready" state (e.g. you copied the prompt but
+    /// decided not to proceed, or you want to re-run from the start).
+    func markReady() {
+        status = "Ready"
+        notifyStatusChange()
+    }
+
+    /// Fire an immediate heartbeat right after a user-driven status change
+    /// (Copy Current Prompt / Mark Ready), so the dashboard shows the new
+    /// status instantly instead of waiting out the next scheduled poll
+    /// (up to ~30s on the idle interval).
+    private func notifyStatusChange() {
+        guard config != nil else { return }
+        Task { await heartbeat() }
     }
 
     func openDashboard() {
@@ -116,8 +140,13 @@ final class Agent: ObservableObject {
 
     private func runOnce() async {
         guard config != nil else { return }
-        await heartbeat()
+        // Talk to the server first, then report over the heartbeat. The
+        // command poll acts as the connection probe: if the server is now
+        // reachable, any stale reachability error from a previous cycle is
+        // cleared *before* the heartbeat goes out, so the UI never shows a
+        // stale "Cannot reach server" for a whole extra cycle.
         await processCommandIfAny()
+        await heartbeat()
     }
 
     // ---- HTTP helpers -------------------------------------------------
@@ -139,6 +168,16 @@ final class Agent: ObservableObject {
 
     // ---- Heartbeat ----------------------------------------------------
 
+    private func clearReachabilityError() {
+        // Connection came back: a persistent config/processing error still
+        // deserves its "Error" status, but a stale reachability blip
+        // ("Cannot reach server: ...") should disappear immediately.
+        if status == "Error", lastError?.hasPrefix("Cannot reach server") == true {
+            status = "Idle"
+            lastError = nil
+        }
+    }
+
     private func heartbeat() async {
         guard let config else { return }
         struct HB: Encodable {
@@ -148,7 +187,16 @@ final class Agent: ObservableObject {
         let body = HB(machineId: config.machineId, harness: config.harness,
                       repositoryPath: repoDir, branch: branch, state: status,
                       lastError: lastError)
-        _ = try? await request("/api/agents/\(config.machineId)/heartbeat", "POST", body: body)
+        do {
+            _ = try await request("/api/agents/\(config.machineId)/heartbeat", "POST", body: body)
+            // The heartbeat is its own proof of reachability; also clear any
+            // stale reachability error here instead of silently swallowing
+            // the result.
+            clearReachabilityError()
+        } catch {
+            status = "Error"
+            lastError = "Cannot reach server: \(error.localizedDescription)"
+        }
     }
 
     // ---- Command processing -------------------------------------------
@@ -163,10 +211,7 @@ final class Agent: ObservableObject {
                 // The server is reachable with nothing to do: clear any
                 // transient reachability error so a fresh launch (or a brief
                 // blip) doesn't leave the agent stuck showing "Error".
-                if status == "Error" {
-                    status = "Idle"
-                    lastError = nil
-                }
+                clearReachabilityError()
                 return
             }
             processed.insert(cmd.id)
@@ -211,6 +256,39 @@ final class Agent: ObservableObject {
         }
         _ = try? await request("/api/agents/\(config.machineId)/command-result", "POST",
                                body: Body(commandId: commandId, success: success, error: error, run: run))
+    }
+
+    // ---- Shutdown -------------------------------------------------------
+
+    /// Called on normal termination (menu Quit, Cmd+Q, or a termination
+    /// signal). Sends one final "Stopped" heartbeat so the server can show a
+    /// deliberate shutdown instead of waiting out the offline timer. This
+    /// must run synchronously with a short timeout because the process is on
+    /// its way out; a best-effort send is enough — the offline override
+    /// catches it if the server happens to be unreachable at this moment.
+    func farewell() {
+        guard let config else { return }
+        struct HB: Encodable {
+            var machineId: String, harness: String, repositoryPath: String
+            var branch: String, state: String, lastError: String?
+        }
+        var req = URLRequest(url: URL(string: "/api/agents/\(config.machineId)/heartbeat",
+                                      relativeTo: config.baseURL)!)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if !config.apiKey.isEmpty {
+            req.setValue(config.apiKey, forHTTPHeaderField: "X-Api-Key")
+        }
+        req.timeoutInterval = 2
+        let body = HB(machineId: config.machineId, harness: config.harness,
+                      repositoryPath: repoDir, branch: branch, state: "Stopped",
+                      lastError: nil)
+        if let data = try? JSONEncoder().encode(body) {
+            req.httpBody = data
+        }
+        let sem = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: req) { _, _, _ in sem.signal() }.resume()
+        _ = sem.wait(timeout: .now() + 2)
     }
 
     // ---- Git helpers --------------------------------------------------
@@ -287,15 +365,37 @@ final class Agent: ObservableObject {
 
     // ---- Collect ------------------------------------------------------
 
+    // Stage and commit every current change so the committed state is what gets
+    // measured. This removes the need for the user to stage/commit by hand before
+    // completing an experiment. Nothing is changed if the tree is already clean.
+    private func stageAndCommit(_ cmd: ServerCommand) throws {
+        let config = config!
+        // Stage everything (respecting .gitignore), including new and deleted files.
+        _ = try git(["add", "-A"], at: repoDir)
+
+        // If nothing is staged there is nothing to commit; that is fine.
+        let staged = try git(["diff", "--cached", "--name-only"], at: repoDir)
+        guard !staged.isEmpty else { return }
+
+        let baseline = cmd.baseline ?? ""
+        let message = "Experiment \(baseline) task \(cmd.taskNumber) attempt \(cmd.attemptNumber) harness \(config.harness)"
+        // Pass an inline identity so the commit never fails just because the
+        // machine has no global git user.name/user.email configured.
+        _ = try git([
+            "-c", "user.name=Cartographer Agent",
+            "-c", "user.email=\(config.machineId)@cartographer.local",
+            "commit", "-m", message
+        ], at: repoDir)
+    }
+
     private func collect(_ cmd: ServerCommand) throws -> RunData {
         try ensureRepoExists()
         guard let baseline = cmd.baseline else {
             throw GitError("Collect command missing baseline.")
         }
 
-        guard try workingTreeIsClean() else {
-            throw GitError("Repository is not clean. Stage and commit all experiment changes before collecting.")
-        }
+        // Automatically stage and commit all current experiment changes.
+        try stageAndCommit(cmd)
 
         let branch = try git(["branch", "--show-current"], at: repoDir)
         let head = try git(["rev-parse", "HEAD"], at: repoDir)

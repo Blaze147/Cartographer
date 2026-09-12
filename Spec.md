@@ -183,12 +183,13 @@ One experiment therefore contains multiple runs, normally one for each registere
 
 When a new experiment starts, every registered Mac should create its own branch.
 
-Use a predictable format:
+Use a predictable format (hierarchical, forward-slash separated, lowercase,
+whitespace replaced with underscores):
 
 ```text
-B001-T004-A02-openhands
-B001-T004-A02-claude
-B001-T004-A02-codex
+b001/task-004/openhands/02
+b001/task-004/claude/02
+b001/task-004/codex/02
 ```
 
 The branch name must contain:
@@ -349,25 +350,22 @@ The cloud UI should have a button:
 [Complete experiment]
 ```
 
-Before clicking Complete Experiment, the user is responsible for ensuring that all intended changes produced during the experiment have been staged and committed.
-
-At collection time, there should be:
-
-* no untracked files created by the experiment
-* no unstaged experiment changes
-* no staged but uncommitted experiment changes
-
-The experiment branch's committed state is the state Cartographer measures.
-
 When Complete Experiment is clicked, every registered machine receives a collection command.
 
-Before collecting results, each agent should verify that the repository is clean.
+When a machine handles that command, it should first automatically stage and commit
+all current changes in its repository (including untracked files), so there is no
+need for the user to stage or commit by hand before completing the experiment. The
+commit message should describe the experiment, e.g. the baseline, harness, task
+number, and attempt number. If there is nothing to commit (the tree is already
+clean), the agent should continue without making a commit. The agent should supply
+an inline git identity so the commit never fails on machines that have no global
+`user.name` / `user.email` configured.
 
-If untracked, unstaged, or staged but uncommitted changes are present, the agent should report an error rather than silently ignoring those changes.
+The experiment branch's committed state (which now includes the agent's automatic
+commit) is the state Cartographer measures.
 
-The agent should not automatically stage, commit, reset, delete, or otherwise modify these files.
-
-Once the repository is verified as clean, the agent should inspect the current experiment branch and gather information that can be determined reliably from Git.
+After staging and committing, the agent should inspect the current experiment branch
+and gather information that can be determined reliably from Git.
 
 The agent should send the results to the server.
 
@@ -577,9 +575,7 @@ Important errors include:
 * Git command failed
 * baseline tag does not exist
 * working tree has unexpected changes before preparation
-* working tree is not clean when collection is requested
-* untracked files are present when collection is requested
-* staged but uncommitted changes are present when collection is requested
+* the automatic stage/commit fails during collection (e.g. git commit errors)
 * branch already exists unexpectedly
 * server command could not be completed
 
@@ -708,9 +704,8 @@ Open dashboard
 -> agents create correct branches
 -> menu bars show Ready
 -> user manually runs coding harnesses
--> user stages and commits all experiment changes
--> user clicks Complete
--> agents verify repositories are clean
+-> user clicks Complete (no manual staging or committing needed)
+-> agents automatically stage and commit all experiment changes
 -> agents collect committed Git statistics
 -> results appear in dashboard
 -> user enters completion status, score, elapsed time, tokens, and notes
