@@ -56,6 +56,11 @@ public class Run
     public string? ElapsedTime { get; set; }
     public string? Tokens { get; set; }
     public string? Notes { get; set; }
+
+    // Live agent state mirrored from the machine's latest heartbeat (Idle,
+    // Preparing, Ready, Working, Collecting, ...). Distinct from Completion:
+    // this is what the local agent itself is doing right now.
+    public string? AgentState { get; set; }
 }
 
 public class Experiment

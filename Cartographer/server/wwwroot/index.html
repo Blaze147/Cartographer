@@ -221,8 +221,10 @@ function renderExp(exp) {
   </div>`;
 }
 
-// A run's state is empty before collection; show experiment command status if available.
-function dotForRun(r) { return dot(r.completion ? r.completion : (r.filesChanged !== undefined && r.collectedAtUtc ? 'Collected' : 'Pending')); }
+// A run's dot: manual completion wins; otherwise show the live agent state
+// mirrored in from the machine's heartbeat (Ready, Working, Collecting, ...),
+// or 'Pending' before the agent has reported anything for this run.
+function dotForRun(r) { return dot(r.completion ? r.completion : (r.agentState || 'Pending')); }
 
 // Display the branch the server actually computed for this experiment —
 // the commands carry it per machine (machines may have different harnesses).

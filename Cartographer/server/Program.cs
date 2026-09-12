@@ -114,6 +114,18 @@ app.MapPost("/api/agents/{machineId}/heartbeat", (string machineId, Machine body
     m.State = body.State;
     m.LastError = body.LastError;
     m.LastHeartbeatUtc = DateTime.UtcNow;
+
+    // Keep the experiment tables live: mirror the agent's current state onto
+    // any run row this machine has that hasn't been collected yet. Once a run
+    // has real collected data the collected values take priority in the UI.
+    if (!string.IsNullOrEmpty(m.State))
+    {
+        foreach (var exp in store.Experiments)
+        {
+            var run = exp.Runs.FirstOrDefault(r => r.MachineId == machineId && r.CollectedAtUtc == null);
+            if (run != null) run.AgentState = m.State;
+        }
+    }
     persistence.Save(store);
     return Results.Ok();
 });
@@ -236,7 +248,8 @@ app.MapPost("/api/experiments/start", (JsonElement body, HttpRequest req) =>
                 Baseline = baseline,
                 TaskNumber = task,
                 AttemptNumber = attempt,
-                Harness = harness
+                Harness = harness,
+                AgentState = m.State
             });
         }
     }
