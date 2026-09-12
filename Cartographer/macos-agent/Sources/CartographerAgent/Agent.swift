@@ -380,12 +380,23 @@ final class Agent: ObservableObject {
         let baseline = cmd.baseline ?? ""
         let message = "Experiment \(baseline) task \(cmd.taskNumber) attempt \(cmd.attemptNumber) harness \(config.harness)"
         // Pass an inline identity so the commit never fails just because the
-        // machine has no global git user.name/user.email configured.
+        // machine has no global git user.name/user.email configured. commits
+        // are attributed to the harness, not the machine: name is the harness
+        // as configured, email is a sanitized lowercase slug of it.
         _ = try git([
-            "-c", "user.name=Cartographer Agent",
-            "-c", "user.email=\(config.machineId)@cartographer.local",
+            "-c", "user.name=\(config.harness)",
+            "-c", "user.email=\(Self.harnessSlug(config.harness))@cartographer.local",
             "commit", "-m", message
         ], at: repoDir)
+    }
+
+    /// Lowercase harness name with whitespace runs collapsed to underscores,
+    /// suitable for the local part of a git-commit email address.
+    static func harnessSlug(_ harness: String) -> String {
+        harness.lowercased()
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: "_")
     }
 
     private func collect(_ cmd: ServerCommand) throws -> RunData {
