@@ -21,7 +21,10 @@ struct CartographerAgentApp: App {
                 Divider()
                 Button("Copy Current Prompt") { agent.copyPrompt() }
                     .disabled(agent.currentPrompt == nil)
+                // Only useful mid-experiment: "copy prompt" kicked off the
+                // run, but you decided not to proceed, so re-arm the agent.
                 Button("Mark Ready") { agent.markReady() }
+                    .disabled(agent.status != "Working")
                 Button("Open Dashboard") { agent.openDashboard() }
                 Button("Refresh") { Task { await agent.refresh() } }
                 Divider()
