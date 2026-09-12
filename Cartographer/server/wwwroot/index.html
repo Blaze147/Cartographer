@@ -119,7 +119,7 @@ function dot(state) {
   // clean shutdown reported by the agent itself (agent said "Stopped").
   const cls = state === 'Ready' || state === 'Collected' ? 'dot-green'
     : (state === 'Offline' || state === 'Error') ? 'dot-red'
-    : (state === 'Preparing' || state === 'Collecting') ? 'dot-orange'
+    : (state === 'Preparing' || state === 'Collecting' || state === 'Working') ? 'dot-orange'
     : 'dot-gray';
   return `<span class="status-dot ${cls}"></span>${esc(state)}`;
 }
