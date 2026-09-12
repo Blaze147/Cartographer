@@ -222,6 +222,23 @@ app.MapPost("/api/experiments/start", (JsonElement body, HttpRequest req) =>
             Prompt = prompt,
             BranchName = BranchName(baseline, task, attempt, harness)
         });
+
+        // Seed a placeholder run row right away so each machine's entry shows
+        // up in the experiment table from the moment the experiment starts,
+        // instead of only once "Complete" triggers its collect result. The
+        // collect path (find-or-create) and the manual save path both target
+        // an existing row by machine id, so they fill this row in in place.
+        if (!exp.Runs.Any(r => r.MachineId == m.MachineId))
+        {
+            exp.Runs.Add(new Run
+            {
+                MachineId = m.MachineId,
+                Baseline = baseline,
+                TaskNumber = task,
+                AttemptNumber = attempt,
+                Harness = harness
+            });
+        }
     }
     store.Experiments.Add(exp);
     persistence.Save(store);
