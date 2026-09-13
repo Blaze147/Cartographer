@@ -61,12 +61,17 @@ ok "    Executable is now runnable without Gatekeeper warnings."
 CONFIG_DIR="$HOME/.cartographer"
 CONFIG_FILE="$CONFIG_DIR/config.json"
 
+# Re-running on an already-configured machine must NOT exit early — the
+# auto-run install below may still need doing. So a decline only skips the
+# config rewrite; everything after this step runs either way.
+write_config=1
 if [ -f "$CONFIG_FILE" ] && [ -s "$CONFIG_FILE" ]; then
     warn "==> A config already exists at $CONFIG_FILE"
     read -r -p "    Overwrite it with fresh values? [y/N] " ans
-    case "$ans" in y|Y) true;; *) echo "    Keeping the existing file."; exit 0;; esac
+    case "$ans" in y|Y) true;; *) write_config=0; warn "    Keeping the existing config and continuing…";; esac
 fi
 
+if [ "$write_config" = 1 ]; then
 echo ""
 say "==> Agent setup: press ENTER to accept the [default] shown."
 echo ""
@@ -101,14 +106,89 @@ cat > "$CONFIG_FILE" <<EOF
 }
 EOF
 ok "==> Wrote $CONFIG_FILE"
+else
+    ok "==> Keeping existing $CONFIG_FILE"
+fi
 
 # ---------------------------------------------------------------------------
-# 5. Offer to start the agent right away
+# 5. Auto-run at login: install a LaunchAgent (if not already installed)
 # ---------------------------------------------------------------------------
+# macOS auto-start works via a LaunchAgent: a small plist placed in
+# ~/Library/LaunchAgents that launchd reads when you log in. launchd starts
+# the agent directly — no Terminal window ever opens; output goes to a log.
+LAUNCH_DIR="$HOME/Library/LaunchAgents"
+PLIST="$LAUNCH_DIR/com.cartographer.agent.plist"
+LOG_FILE="$CONFIG_DIR/agent.log"
+
+install_launchagent() {
+    mkdir -p "$LAUNCH_DIR" "$CONFIG_DIR" || { echo "Could not create $LAUNCH_DIR"; return 1; }
+    cat > "$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cartographer.agent</string>
+
+    <!-- The absolute binary path is baked in at setup time. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>$BIN</string>
+    </array>
+
+    <!-- Start at login. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Keep it running across the whole session (relaunch on crash). -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>$LOG_FILE</string>
+    <key>StandardErrorPath</key>
+    <string>$LOG_FILE</string>
+</dict>
+</plist>
+EOF
+    # Register it with launchd and start it immediately (StartAtLoad-ish).
+    launchctl bootout "gui/$(id -u)/com.cartographer.agent" 2>/dev/null
+    launchctl bootstrap "gui/$(id -u)" "$PLIST" || { echo "launchctl bootstrap failed"; return 1; }
+    ok "==> LaunchAgent installed: $PLIST"
+    ok "==> Agent started in the background (log: $LOG_FILE)"
+}
+
 echo ""
-read -r -p "==> Start the agent now? [Y/n] " ans
+auto_running=0
+if [ -f "$PLIST" ]; then
+    warn "==> Auto-run is already installed: $PLIST"
+    warn "    (leaving it alone; to re-install, delete that file first)"
+    auto_running=1
+else
+    read -r -p "==> Install auto-run at login (LaunchAgent, runs in background, no Terminal)? [Y/n] " ans
+    case "$ans" in
+    n|N) warn "    Skipping auto-run. Start the agent manually any time." ;;
+    *) if install_launchagent; then auto_running=1
+       else warn "    Auto-run install failed; start the agent manually instead."; fi ;;
+    esac
+fi
+
+# ---------------------------------------------------------------------------
+# 6. Offer to start the agent right away (foreground) — only when auto-run
+#    was not set up, since in that case launchd is already running it.
+# ---------------------------------------------------------------------------
+if [ "$auto_running" = 1 ]; then
+    echo ""
+    ok "==> The agent is already running in the background (log: $LOG_FILE)."
+    echo "Done. This window can be closed."
+    exit 0
+fi
+
+echo ""
+read -r -p "==> Start the agent in this window now? [Y/n] " ans
 case "$ans" in n|N)
-    echo "Done. Run this file again, or '$BIN' directly, later."
+    echo "Done. This window can be closed."
     exit 0;;
 esac
 
