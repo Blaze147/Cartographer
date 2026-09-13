@@ -21,6 +21,26 @@
   .fl-modified{ color:#fd7e14; }   /* files edited  */
   .fl-deleted { color:#dc3545; }   /* files removed */
   .hidden { display:none; }
+  /* Top-right "Model settings" toggle: sits quietly in the dark navbar. */
+  #modelsDropdown {
+    border-color: rgba(255,255,255,.18);
+    background: rgba(255,255,255,.08);
+    box-shadow: 0 1px 3px rgba(0,0,0,.45);
+    color: #ced4da;
+  }
+  #modelsDropdown:hover, #modelsDropdown:focus {
+    background: rgba(255,255,255,.16);
+    border-color: rgba(255,255,255,.3);
+    color: #fff;
+  }
+  #modelsDropdown .badge { box-shadow: none; }
+  /* Per-experiment … menu button: intentionally tiny and unobtrusive. */
+  .exp-gear {
+    color: #adb5bd !important;
+    padding: 0 .45rem;
+    line-height: 1.4;
+    font-weight: 700;
+  }
 </style>
 </head>
 <body class="bg-light">
@@ -28,6 +48,25 @@
   <div class="container">
     <span class="navbar-brand">Cartographer</span>
     <span class="navbar-text text-warning small" id="authMsg"></span>
+    <!-- Model catalog lives behind a settings dropdown so it costs no page space. -->
+    <div class="dropdown ms-auto">
+      <button class="btn btn-outline-light btn-sm dropdown-toggle" id="modelsDropdown"
+              data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
+        Model settings <span class="badge text-bg-secondary" id="modelCount">0</span>
+      </button>
+      <div class="dropdown-menu dropdown-menu-end p-3" style="min-width:20rem;">
+        <div class="d-flex gap-2">
+          <input id="newModel" class="form-control form-control-sm" style="flex:1;"
+            placeholder="e.g. gpt-5.2, glm-5.3" onkeydown="if(event.key==='Enter')addModel()">
+          <button class="btn btn-sm btn-outline-primary" onclick="addModel()">Add</button>
+        </div>
+        <div id="modelList" class="d-flex flex-wrap gap-1 mt-2"></div>
+        <div class="text-muted small mt-2" style="max-width:18rem;">
+          Claude Code / Codex force their own proprietary models — the
+          experimental model picker applies only to other harnesses.
+        </div>
+      </div>
+    </div>
   </div>
 </nav>
 
@@ -50,7 +89,13 @@
           <label class="form-label small">Attempt number</label>
           <input id="attempt" class="form-control form-control-sm" type="number" min="1" value="1">
         </div>
-        <div class="col-md-5">
+        <div class="col-md-2">
+          <label class="form-label small">Model</label>
+          <select id="model" class="form-select form-select-sm">
+            <option value="">— none —</option>
+          </select>
+        </div>
+        <div class="col-md-3">
           <label class="form-label small">Prompt</label>
           <textarea id="prompt" class="form-control form-control-sm" rows="2"
             placeholder="Task text goes here"></textarea>
@@ -103,6 +148,92 @@ async function authedFetch(url, opts = {}) {
 async function refresh() {
   loadMachines();
   loadExperiments();
+  loadModels();
+}
+
+// ---- Model tracking -----------------------------------------------------
+
+let modelOptions = [];   // the persisted server-side catalog
+
+// Harnesses whose vendor forces proprietary models: the model picker does
+// not apply and run rows there show "n/a" instead of a model.
+function modelApplies(harness) {
+  const h = (harness || '').toLowerCase();
+  return h !== '' && !h.includes('claude code') && !h.includes('codex');
+}
+
+async function loadModels() {
+  const res = await authedFetch('/api/models');
+  if (!res.ok) return;
+  const models = await res.json();
+  if (JSON.stringify(models) === JSON.stringify(modelOptions)) return;
+  const firstLoad = modelOptions.length === 0 && models.length > 0;
+  modelOptions = models;
+  renderModelList();
+  renderModelSelect('#model');           // start form
+  // The experiments table is skipped by loadExperiments when nothing changed,
+  // so on the first catalog fill force the header selects to rebuild now.
+  if (firstLoad) { lastExperiments = null; await loadExperiments(); }
+}
+
+// Populate a model <select>, keeping the same value selected when possible.
+// Selecting an experiment's saved model keeps working even after someone
+// removes it from the catalog: it is shown and remains valid.
+function renderModelSelect(sel, selected) {
+  const el = $(sel);
+  if (!el) return;
+  const keep = selected !== undefined ? selected : el.value;
+  const opts = [`<option value="">— none —</option>`,
+    ...modelOptions.map(m =>
+      `<option value="${esc(m)}" ${m === keep ? 'selected' : ''}>${esc(m)}</option>`) ];
+  if (keep && !modelOptions.includes(keep) && keep !== '')
+    opts.push(`<option value="${esc(keep)}" selected>${esc(keep)} (removed from catalog)</option>`);
+  el.innerHTML = opts.join('');
+}
+
+function renderModelList() {
+  const wrap = $('#modelList');
+  if (!wrap) return;
+  wrap.innerHTML = modelOptions.length
+    ? modelOptions.map(m =>
+        `<div class="d-flex justify-content-between align-items-center w-100 py-1 border-bottom">
+           <span class="small">${esc(m)}</span>
+           <button type="button" class="btn btn-sm btn-outline-danger py-0 px-2"
+             onclick="removeModel('${esc(m)}')" title="Remove from catalog">&times;</button>
+         </div>`).join('')
+    : '<div class="text-muted small">No models in the catalog yet — add one above.</div>';
+  const count = $('#modelCount');
+  if (count) count.textContent = modelOptions.length;
+}
+
+async function addModel() {
+  const name = $("#newModel").value.trim();
+  if (!name) return;
+  const res = await authedFetch('/api/models', { method: 'POST', body: JSON.stringify({ name }) });
+  if (res.ok) { $("#newModel").value = ''; await loadModels(); }
+}
+
+async function removeModel(name) {
+  if (!confirm(`Remove "${name}" from the model catalog?\nExperiments already tagged with it keep their recorded value.`)) return;
+  const res = await authedFetch('/api/models/' + encodeURIComponent(name), { method: 'DELETE' });
+  if (res.ok) await loadModels();
+}
+
+// Pick the model for an experiment from its header dropdown. The server
+// copies the choice onto every model-eligible run of the experiment.
+async function saveExpModel(expId, value) {
+  const res = await authedFetch(`/api/experiments/${expId}/model`, {
+    method: 'POST', body: JSON.stringify({ model: value })
+  });
+  if (res.ok) await loadExperiments();
+}
+
+// Show the model recorded for a run row. Proprietary-model harnesses
+// (Claude Code, Codex) force their own model: show "n/a", never a picker.
+function modelCell(exp, r) {
+  if (!modelApplies(r.harness)) return '<span class="text-muted small" title="Vendor forces its own models">n/a</span>';
+  const m = r.model || exp.model || '';
+  return m ? `<span class="small">${esc(m)}</span>` : '<span class="text-muted small">—</span>';
 }
 
 async function loadMachines() {
@@ -179,6 +310,7 @@ function renderExp(exp) {
     <tr>
       <td>${dotForRun(r)}</td>
       <td>${esc(r.harness || '')}</td>
+      <td>${modelCell(exp, r)}</td>
       <td>
         <select id="f-${exp.id}-${r.machineId}-completion" data-exp="${exp.id}" data-mach="${r.machineId}" data-field="completion" class="form-select form-select-sm"
           oninput="markDirty('${exp.id}','${r.machineId}','completion',this.value)"
@@ -214,7 +346,7 @@ function renderExp(exp) {
           onchange="saveRun('${exp.id}','${r.machineId}','notes',this.value)">
       </div></td>
     </tr>
-    <tr class="files-row hidden" id="files-${exp.id}-${r.machineId}"><td colspan="10" class="small">
+    <tr class="files-row hidden" id="files-${exp.id}-${r.machineId}"><td colspan="11" class="small">
       Changed files:<div class="mono">${esc((r.changedFiles||[]).join(', ') || '(none)')}</div>
       <details id="detail-${exp.id}-${r.machineId}"><summary>Full diff</summary><pre class="mono small bg-white border p-2">${esc(r.diff||'(none)')}</pre></details>
     </td></tr>`).join('');
@@ -227,20 +359,50 @@ function renderExp(exp) {
         <span class="text-muted small">(${esc(exp.id.slice(0,8))})</span>
         <span class="ms-2 mono small text-info">${esc(branch)}</span>
       </span>
-      <button class="btn btn-warning btn-sm" onclick="complete('${exp.id}')">Complete experiment</button>
+      <span class="d-flex align-items-center gap-2">
+        ${modelSelectHtml(exp)}
+        <button class="btn btn-warning btn-sm" onclick="complete('${exp.id}')">Complete experiment</button>
+      </span>
     </div>
     <div class="card-body p-0">
       <div class="table-responsive">
         <table class="table table-sm table-striped mb-0">
           <thead><tr>
-            <th>State</th><th>Harness</th><th>Status</th><th>Score</th><th>Time</th><th>Tokens</th>
+            <th>State</th><th>Harness</th><th>Model</th><th>Status</th><th>Score</th><th>Time</th><th>Tokens</th>
             <th>Files</th><th>Lines</th><th></th><th>Notes</th>
           </tr></thead>
-          <tbody>${rows || '<tr><td colspan="10" class="text-muted">No runs yet — agents collect when you click Complete.</td></tr>'}</tbody>
+          <tbody>${rows || '<tr><td colspan="11" class="text-muted">No runs yet — agents collect when you click Complete.</td></tr>'}</tbody>
         </table>
       </div>
     </div>
     <div class="card-footer small text-muted">Prompt: ${esc(exp.prompt || '')}</div>
+  </div>`;
+}
+
+// The experiment header's model picker: deliberately tucked into a small
+// "…" ellipse button instead of occupying bar space, since the model is
+// usually set once at experiment start.
+function modelSelectHtml(exp) {
+  const chosen = exp.model ?? exp.Model;
+  const opts = [`<option value="">— none —</option>`]
+    .concat(modelOptions.map(m =>
+      `<option value="${esc(m)}" ${m === chosen ? 'selected' : ''}>${esc(m)}</option>`));
+  if (chosen && !modelOptions.includes(chosen))
+    opts.push(`<option value="${esc(chosen)}" selected>${esc(chosen)} (removed from catalog)</option>`);
+  return `<div class="dropdown ms-1">
+    <button class="btn btn-outline-secondary btn-sm exp-gear" title="Model settings"
+      data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false"
+      aria-label="Experiment model settings">…</button>
+    <div class="dropdown-menu dropdown-menu-end p-2" style="min-width:12rem;">
+      <label class="small text-muted mb-1 d-block">Model:</label>
+      <select class="form-select form-select-sm"
+        onchange="saveExpModel('${exp.id}', this.value)">
+        ${opts.join('')}
+      </select>
+      <div class="text-muted" style="font-size:.75rem; margin-top:.4rem;">
+        Claude Code / Codex runs are forced to their own proprietary models.
+      </div>
+    </div>
   </div>`;
 }
 
@@ -285,18 +447,24 @@ function linesCell(r) {
   return b.join(' ');
 }
 
-// Display the branch the server actually computed for this experiment —
-// the commands carry it per machine (machines may have different harnesses).
-// Fall back to the client-side scheme when commands data is absent.
+// Display the branch pattern for this experiment, not one machine's actual
+// branch. Each run checks out its own branch whose third segment is that
+// machine's harness slug (see BranchName() in Program.cs), so the header
+// shows "*harness*" as a stand-in: "b001/task-001/*harness*/01". The full
+// per-machine branch names appear on the run rows and in the commands list.
 function branchName(exp) {
   const fromCmd = (exp.commands && exp.commands[0] && exp.commands[0].branchName) || '';
-  if (fromCmd) return fromCmd;
+  if (fromCmd) {
+    const parts = fromCmd.split('/');
+    if (parts.length === 4 && parts[2] !== '*harness*') parts[2] = '*harness*';
+    return parts.join('/');
+  }
   let tag = exp.baseline.trim();
   if (tag.startsWith('baseline')) tag = tag.slice(8);
   // The new "baseline/bXXX" spelling leaves a leading separator behind.
   tag = tag.replace(/^[/\s]+/, '');
   const safe = s => s.trim().replace(/\s+/g, '_').toLowerCase();
-  return `${safe(tag)}/task-${String(exp.taskNumber).padStart(3,'0')}/${safe(exp.harness || '')}/${String(exp.attemptNumber).padStart(2,'0')}`;
+  return `${safe(tag)}/task-${String(exp.taskNumber).padStart(3,'0')}/*harness*/${String(exp.attemptNumber).padStart(2,'0')}`;
 }
 
 function toggleFiles(expId, machineId) {
@@ -446,7 +614,7 @@ let lastExperimentDefaults = null;
 
 // Fields the user has explicitly edited keep their value; the auto-defaults
 // never fight with manual input.
-const startFormTouched = { baseline: false, task: false, attempt: false };
+const startFormTouched = { baseline: false, task: false, attempt: false, model: false };
 
 function applyStartFormDefaults(exps) {
   const last = exps && exps[0];
@@ -455,6 +623,7 @@ function applyStartFormDefaults(exps) {
   const taskEl = $("#task");
   if (!startFormTouched.baseline) $("#baseline").value = last.baseline;
   if (!startFormTouched.task) taskEl.value = last.taskNumber;
+  if (!startFormTouched.model) renderModelSelect('#model', last.model || last.Model || '');
   if (!startFormTouched.attempt) {
     // If the user already steered the task number away from the last
     // experiment's task (see the listener below), a new task starts the
@@ -485,6 +654,7 @@ $("#baseline").addEventListener('input', () => {
 ['baseline', 'task', 'attempt'].forEach(id => {
   $("#"+id).addEventListener('input', () => { startFormTouched[id] = true; });
 });
+$("#model").addEventListener('change', () => { startFormTouched.model = true; });
 
 // ---- Start experiment -------------------------------------------------
 
@@ -493,7 +663,8 @@ async function startExperiment() {
     baseline: $("#baseline").value.trim(),
     taskNumber: Number($("#task").value),
     attemptNumber: Number($("#attempt").value),
-    prompt: $("#prompt").value
+    prompt: $("#prompt").value,
+    model: $("#model").value || null
   };
   if (!payload.baseline || !payload.taskNumber || !payload.attemptNumber) {
     alert('Baseline, task number, and attempt number are required.');
@@ -506,7 +677,7 @@ async function startExperiment() {
     $("#prompt").value = '';
     // The new experiment is now the "latest": clear user-touch flags so the
     // defaults roll forward (baseline, task, attempt+1) from it.
-    startFormTouched.baseline = startFormTouched.task = startFormTouched.attempt = false;
+    startFormTouched.baseline = startFormTouched.task = startFormTouched.attempt = startFormTouched.model = false;
     refresh();
   }
 }

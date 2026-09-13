@@ -56,6 +56,27 @@ static string BranchName(string baseline, int task, int attempt, string harness)
 static bool IsOffline(DateTime? hb, int offlineSeconds) =>
     hb == null || (DateTime.UtcNow - hb.Value).TotalSeconds > offlineSeconds;
 
+// ---- Model tracking ----------------------------------------------------
+// Harnesses whose vendor forces their own proprietary models — the user has
+// no free model choice on those, so the model picker does not apply and run
+// rows there store no model at all.
+static bool ModelAppliesTo(string? harness)
+{
+    if (string.IsNullOrWhiteSpace(harness)) return false;
+    var h = harness.Trim();
+    if (h.Contains("claude code", StringComparison.OrdinalIgnoreCase)) return false;
+    if (h.Contains("codex", StringComparison.OrdinalIgnoreCase)) return false;
+    return true;
+}
+
+// Copy an experiment's chosen model onto every run whose harness allows a
+// free model choice; proprietary-harness runs always hold no model.
+static void PropagateModel(Experiment exp)
+{
+    foreach (var run in exp.Runs)
+        run.Model = ModelAppliesTo(run.Harness) ? exp.Model : null;
+}
+
 // State shown to the web UI. If the agent announced a clean shutdown
 // ("Stopped"), that state stays put: the farewell heartbeat means the agent
 // went down gracefully and nothing newer will arrive until it starts again.
@@ -166,6 +187,11 @@ app.MapPost("/api/agents/{machineId}/command-result", (string machineId, JsonEle
             var machine = store.Machines.FirstOrDefault(x => x.MachineId == machineId);
             run.MachineId = machineId;
             run.Harness ??= machine?.Harness;
+            // Agents never report a model (it is web-UI data); make sure the
+            // incoming payload cannot introduce one. Eligible harnesses keep
+            // or inherit the experiment's choice below; proprietary rows (Claude
+            // Code, Codex) always stay modelless.
+            run.Model = null;
             var existing = pair.exp.Runs.FirstOrDefault(r => r.MachineId == machineId);
             if (existing != null)
             {
@@ -194,6 +220,44 @@ app.MapPost("/api/agents/{machineId}/command-result", (string machineId, JsonEle
             }
         }
     }
+    persistence.Save(store);
+    return Results.Ok();
+});
+
+// ---- Model catalog endpoints (browser) ----------------------------------
+
+app.MapGet("/api/models", (HttpRequest req) =>
+{
+    if (!WebAuthorized(req)) return Results.Unauthorized();
+    return Results.Json(store.Models);
+});
+
+// Body: { name }. Adding is case-insensitively deduped.
+app.MapPost("/api/models", (JsonElement body, HttpRequest req) =>
+{
+    if (!WebAuthorized(req)) return Results.Unauthorized();
+    var name = body.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+    name = name.Trim();
+    if (name.Length == 0) return Results.BadRequest("name is required.");
+    var existing = store.Models.FirstOrDefault(m =>
+        string.Equals(m, name, StringComparison.OrdinalIgnoreCase));
+    if (existing == null)
+    {
+        store.Models.Add(name);
+        persistence.Save(store);
+        return Results.Ok(name);
+    }
+    return Results.Ok(existing);
+});
+
+app.MapDelete("/api/models/{*name}", (string name, HttpRequest req) =>
+{
+    if (!WebAuthorized(req)) return Results.Unauthorized();
+    // Experiments keep whatever model string they were tagged with, so
+    // removal only affects future pickers, never recorded data.
+    var removed = store.Models.RemoveAll(m =>
+        string.Equals(m, name, StringComparison.OrdinalIgnoreCase)) > 0;
+    if (!removed) return Results.NotFound();
     persistence.Save(store);
     return Results.Ok();
 });
@@ -228,11 +292,12 @@ app.MapPost("/api/experiments/start", (JsonElement body, HttpRequest req) =>
     var task = body.TryGetProperty("taskNumber", out var t) ? t.GetInt32() : 0;
     var attempt = body.TryGetProperty("attemptNumber", out var a) ? a.GetInt32() : 0;
     var prompt = body.TryGetProperty("prompt", out var p) ? p.GetString() ?? "" : "";
+    var model = body.TryGetProperty("model", out var mo) ? mo.GetString() : null;
 
     if (baseline.Length == 0 || task < 1 || attempt < 1)
         return Results.BadRequest("baseline, taskNumber, and attemptNumber are required.");
 
-    var exp = new Experiment { Baseline = baseline, TaskNumber = task, AttemptNumber = attempt, Prompt = prompt };
+    var exp = new Experiment { Baseline = baseline, TaskNumber = task, AttemptNumber = attempt, Prompt = prompt, Model = model };
 
     foreach (var m in store.Machines)
     {
@@ -274,6 +339,28 @@ app.MapPost("/api/experiments/start", (JsonElement body, HttpRequest req) =>
         }
     }
     store.Experiments.Add(exp);
+    PropagateModel(exp);
+    persistence.Save(store);
+    return Results.Ok(exp);
+});
+
+// Pick the model for this experiment. Body: { model } (empty string = none).
+// The choice lands on the experiment itself and on every run row whose
+// harness allows free model choice; Claude Code / Codex rows stay modelless.
+app.MapPost("/api/experiments/{id}/model", (string id, JsonElement body, HttpRequest req) =>
+{
+    if (!WebAuthorized(req)) return Results.Unauthorized();
+
+    var exp = store.Experiments.FirstOrDefault(e => e.Id == id);
+    if (exp == null) return Results.NotFound();
+
+    var model = body.TryGetProperty("model", out var m) ? m.GetString() : null;
+    if (string.IsNullOrWhiteSpace(model)) model = null;
+    else if (!store.Models.Contains(model, StringComparer.OrdinalIgnoreCase))
+        return Results.BadRequest($"Unknown model '{model}'.");
+
+    exp.Model = model;
+    PropagateModel(exp);
     persistence.Save(store);
     return Results.Ok(exp);
 });
@@ -330,6 +417,12 @@ app.MapPost("/api/experiments/{id}/runs/{machineId}", (string id, string machine
     if (body.Score.HasValue) run.Score = body.Score;
     run.ElapsedTime = body.ElapsedTime ?? run.ElapsedTime;
     run.Tokens = body.Tokens ?? run.Tokens;
+    // The model is experiment-level in the UI; a run-row edit is not offered.
+    // Guard anyway: proprietary harnesses can never carry a model, and an
+    // eligible run without one inherits the experiment's choice.
+    run.Model = !ModelAppliesTo(run.Harness) ? null
+        : (!string.IsNullOrEmpty(body.Model) ? body.Model
+        : (run.Model ?? (ModelAppliesTo(run.Harness) ? exp.Model : null)));
     run.Notes = body.Notes ?? run.Notes;
     persistence.Save(store);
     return Results.Ok(run);

@@ -57,6 +57,12 @@ public class Run
     public string? Tokens { get; set; }
     public string? Notes { get; set; }
 
+    // Model used for this run, picked in the web UI on the experiment header
+    // and copied to every run whose harness allows a free model choice. Null
+    // for runs on proprietary-model harnesses (Claude Code, Codex) — see
+    // ModelAppliesTo in Program.cs — and until a model has been picked.
+    public string? Model { get; set; }
+
     // Live agent state mirrored from the machine's latest heartbeat (Idle,
     // Preparing, Ready, Working, Collecting, ...). Distinct from Completion:
     // this is what the local agent itself is doing right now.
@@ -71,6 +77,12 @@ public class Experiment
     public int AttemptNumber { get; set; }
     public string Prompt { get; set; } = "";
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+
+    // Model chosen in the web UI for this experiment (the catalog entry that
+    // went into every model-eligible run row; see Run.Model). Null until the
+    // user picks one.
+    public string? Model { get; set; }
+
     public List<Command> Commands { get; set; } = new();
     public List<Run> Runs { get; set; } = new();
 }
@@ -79,6 +91,10 @@ public class Store
 {
     public List<Machine> Machines { get; set; } = new();
     public List<Experiment> Experiments { get; set; } = new();
+
+    // The model "enum": catalog of selectable model names, managed from the
+    // web UI. Entries are referenced by experiments/runs by display name.
+    public List<string> Models { get; set; } = new();
 }
 
 // ---- JSON-file persistence -------------------------------------------
