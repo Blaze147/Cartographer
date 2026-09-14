@@ -1,0 +1,25 @@
+# fly.toml app configuration file generated for cartographer-uw2wha on 2026-09-14T19:51:33Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'cartographer-uw2wha'
+primary_region = 'dfw'
+
+[http_service]
+  auto_start_machines = true
+  auto_stop_machines = 'stop'
+  force_https = false
+  internal_port = 8080
+  min_machines_running = 0
+  processes = ['app']
+
+[[mounts]]
+  destination = '/data'
+  source = 'data'
+
+[[vm]]
+  cpu_kind = 'shared'
+  cpus = 1
+  memory = '1gb'
+  memory_mb = 256
