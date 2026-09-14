@@ -12,6 +12,7 @@ WORKDIR /app
 COPY --from=build /out .
 ENV ASPNETCORE_URLS=http://+:8080 \
     CARTOGRAPHER_DATA=/data/data.json
-VOLUME /data
+# removing due to a limitation with Railway
+# VOLUME /data
 EXPOSE 8080
 ENTRYPOINT ["dotnet", "Cartographer.dll"]
