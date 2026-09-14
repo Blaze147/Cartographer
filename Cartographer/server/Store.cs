@@ -111,6 +111,12 @@ public class Persistence
 
     public Store Load()
     {
+        // The persistent volume may be fresh, so first make sure its directory
+        // exists — a second compute node starting on an empty store should not
+        // crash before the first Save() runs.
+        var dir = Path.GetDirectoryName(_path);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+
         if (File.Exists(_path))
         {
             try

@@ -7,7 +7,25 @@ var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.UseWebRoot(Path.Combine(builder.Environment.ContentRootPath, "wwwroot"));
 
 // Read configuration from environment / appsettings.
-string dataPath = Environment.GetEnvironmentVariable("CARTOGRAPHER_DATA") ?? "data.json";
+//
+// The data file lives on a persistent volume, not on the (ephemeral) app
+// directory: default to the /data mount when it exists (containers), or to a
+// "data" directory next to the app (Cartographer/server/data in the cloud
+// deployment). CARTOGRAPHER_DATA overrides both.
+string DefaultDataPath()
+{
+    var mounts = new[] { "/data", Path.Combine(builder.Environment.ContentRootPath, "data") };
+    foreach (var dir in mounts)
+    {
+        try
+        {
+            if (Directory.Exists(dir)) return Path.Combine(dir, "data.json");
+        }
+        catch { /* unreachable / not permitted — try the next candidate */ }
+    }
+    return Path.Combine(builder.Environment.ContentRootPath, "data", "data.json");
+}
+string dataPath = Environment.GetEnvironmentVariable("CARTOGRAPHER_DATA") ?? DefaultDataPath();
 string apiKey = Environment.GetEnvironmentVariable("CARTOGRAPHER_API_KEY") ?? "";
 int offlineSeconds = int.Parse(Environment.GetEnvironmentVariable("CARTOGRAPHER_OFFLINE_SECONDS") ?? "90");
 string webPassword = Environment.GetEnvironmentVariable("CARTOGRAPHER_WEB_PASSWORD") ?? "";
