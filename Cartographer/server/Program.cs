@@ -383,6 +383,22 @@ app.MapPost("/api/experiments/{id}/model", (string id, JsonElement body, HttpReq
     return Results.Ok(exp);
 });
 
+// Set (or clear) the experiment's custom title. Body: { title } — an empty
+// title clears it and the header falls back to the default
+// "Baseline · Task N · Attempt N". Baseline/task/attempt data is preserved.
+app.MapPost("/api/experiments/{id}/title", (string id, JsonElement body, HttpRequest req) =>
+{
+    if (!WebAuthorized(req)) return Results.Unauthorized();
+
+    var exp = store.Experiments.FirstOrDefault(e => e.Id == id);
+    if (exp == null) return Results.NotFound();
+
+    var title = body.TryGetProperty("title", out var t) ? t.GetString() : null;
+    exp.CustomTitle = string.IsNullOrWhiteSpace(title) ? null : title.Trim();
+    persistence.Save(store);
+    return Results.Ok(exp);
+});
+
 // Ask every machine to collect its run for this experiment.
 app.MapPost("/api/experiments/{id}/complete", (string id, HttpRequest req) =>
 {

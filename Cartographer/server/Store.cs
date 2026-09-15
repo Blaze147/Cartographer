@@ -83,6 +83,11 @@ public class Experiment
     // user picks one.
     public string? Model { get; set; }
 
+    // Optional human-written title. When set, the card header shows this
+    // instead of the "Baseline · Task N · Attempt N" default; the underlying
+    // fields stay intact and are surfaced in the title tooltip.
+    public string? CustomTitle { get; set; }
+
     public List<Command> Commands { get; set; } = new();
     public List<Run> Runs { get; set; } = new();
 }

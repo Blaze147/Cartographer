@@ -304,6 +304,7 @@ function dot(state) {
 // ---- Experiments ------------------------------------------------------
 
 let lastExperiments = null;  // JSON snapshot of the experiments we last rendered
+let forceExperimentsRender = false; // set by UI actions that need a re-render even without new data
 
 async function loadExperiments() {
   const res = await authedFetch('/api/experiments');
@@ -313,11 +314,20 @@ async function loadExperiments() {
   // Nothing changed since the last render: leave the DOM alone so the user's
   // in-progress typing, caret, expanded files rows and open diffs stay
   // exactly as they are instead of being wiped by the auto-refresh timer.
-  if (snap === lastExperiments) return;
+  // A UI action (e.g. toggling the custom-title info) can force a re-render
+  // even when the server data is unchanged.
+  if (!forceExperimentsRender && snap === lastExperiments) return;
+  forceExperimentsRender = false;
   lastExperiments = snap;
   // Experiments arrive newest-first; use the latest one to default the
   // next-experiment form.
   applyStartFormDefaults(exps);
+  // Keep the title cache in sync with the server list so the title-edit
+  // prompt always pre-fills the current custom title, even after a reload.
+  for (const e of exps) {
+    const t = (e.customTitle ?? e.CustomTitle ?? '').trim();
+    if (t) expTitles[e.id] = t; else delete expTitles[e.id];
+  }
   captureCurrentFocus();
   captureExpandedState();
   $("#experimentsWrap").innerHTML = exps.map(exp => renderExp(exp)).join('');
@@ -375,10 +385,13 @@ function renderExp(exp) {
   return `
   <div class="card mb-3">
     <div class="card-header d-flex justify-content-between align-items-center">
-      <span>
-        <strong>${esc(exp.baseline)}</strong> · Task ${exp.taskNumber} · Attempt ${exp.attemptNumber}
-        <span class="text-muted small">(${esc(exp.id.slice(0,8))})</span>
+      <span class="d-flex align-items-center flex-wrap gap-1">
+        ${expTitleHtml(exp)}
+        ${(exp.customTitle ?? exp.CustomTitle ?? '').trim() ? '' : `<span class="text-muted small">(${esc(exp.id.slice(0,8))})</span>`}
         <span class="ms-2 mono small text-info">${esc(branch)}</span>
+        <button class="btn btn-outline-secondary btn-sm py-0 px-1" title="Edit experiment title"
+          aria-label="Edit experiment title"
+          onclick="editTitle('${exp.id}')">✎</button>
       </span>
       <span class="d-flex align-items-center gap-2">
         ${modelSelectHtml(exp)}
@@ -425,6 +438,50 @@ function modelSelectHtml(exp) {
       </div>
     </div>
   </div>`;
+}
+
+// The experiment card header's left side. Default: "Baseline · Task N ·
+// Attempt N" — the identity the card carries until the user names it. Once a
+// custom title exists it replaces that text; the baseline / task / attempt
+// data stays in the dataset and is shown again by clicking the title (a
+// hover tooltip is unreliable here because the 5s auto-refresh rebuilds the
+// card and kills a native tooltip while it is still fading in).
+const openTitleInfo = new Set();
+
+function toggleTitleInfo(expId) {
+  if (openTitleInfo.has(expId)) openTitleInfo.delete(expId);
+  else openTitleInfo.add(expId);
+  forceExperimentsRender = true;
+  refresh();
+}
+
+function expTitleHtml(exp) {
+  const custom = (exp.customTitle ?? exp.CustomTitle ?? '').trim();
+  if (!custom) return `<strong>${esc(exp.baseline)}</strong> · Task ${exp.taskNumber} · Attempt ${exp.attemptNumber}`;
+  const info = `Baseline: ${esc(exp.baseline)} · Task ${exp.taskNumber} · Attempt ${exp.attemptNumber}`;
+  const revealed = openTitleInfo.has(exp.id) ? `<span class="text-muted small">${info}</span>` : '';
+  return `<strong title="${info}" style="cursor:pointer" onclick="toggleTitleInfo('${exp.id}')">${esc(custom)}</strong>${revealed ? ' ' + revealed : ''}`;
+}
+
+// Prompts for the experiment title. Pre-fills the current title if one is
+// set; submitting an empty string clears the title so the default
+// "Baseline · Task N · Attempt N" comes back.
+// Current titles per experiment id (seeded when the user saves one; the
+// server list re-renders from /api/experiments anyway, this only pre-fills
+// the edit prompt).
+const expTitles = {};
+
+async function editTitle(expId) {
+  const current = expTitles[expId] || '';
+  const title = prompt('Experiment title (leave empty to restore default Baseline · Task · Attempt):', current);
+  if (title === null) return;
+  const res = await authedFetch(`/api/experiments/${expId}/title`, {
+    method: 'POST', body: JSON.stringify({ title })
+  });
+  if (res.ok) {
+    expTitles[expId] = title.trim();
+    refresh();
+  }
 }
 
 // A run's dot: manual completion wins; then collected data ("Collected");
